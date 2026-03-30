@@ -1,0 +1,19 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.python-version
+
+# Vector DB data
+chroma_multimodule_db/
+my_local_bge_m3/
+my_local_bge_reranker/
+my_local_bge_retriever_db/
+# Local caches
+.cache/
+
+# OS / editor
+.vscode/
+.DS_Store
+Thumbs.db

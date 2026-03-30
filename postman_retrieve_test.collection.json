@@ -1,0 +1,453 @@
+{
+  "info": {
+    "_postman_id": "2b4cb9e0-8f0b-4d62-9b4a-7f7d8d7d9d10",
+    "name": "RAG Backend API Test",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Ingest - Build Index",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{protocol}}://{{host}}:{{port}}/ingest",
+          "protocol": "{{protocol}}",
+          "host": [
+            "{{host}}"
+          ],
+          "port": "{{port}}",
+          "path": [
+            "ingest"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Clear - Empty Index",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{protocol}}://{{host}}:{{port}}/clear",
+          "protocol": "{{protocol}}",
+          "host": [
+            "{{host}}"
+          ],
+          "port": "{{port}}",
+          "path": [
+            "clear"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Rebuild - Reset And Reingest",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{protocol}}://{{host}}:{{port}}/rebuild",
+          "protocol": "{{protocol}}",
+          "host": [
+            "{{host}}"
+          ],
+          "port": "{{port}}",
+          "path": [
+            "rebuild"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Stats - Chunk Statistics",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{protocol}}://{{host}}:{{port}}/chunks/stats",
+          "protocol": "{{protocol}}",
+          "host": [
+            "{{host}}"
+          ],
+          "port": "{{port}}",
+          "path": [
+            "chunks",
+            "stats"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Retrieve - Order Center",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": \"订单创建后怎么查询发货物流状态？\",\n  \"domains\": [\"order-center\"]\n}"
+        },
+        "url": {
+          "raw": "{{protocol}}://{{host}}:{{port}}/retrieve",
+          "protocol": "{{protocol}}",
+          "host": [
+            "{{host}}"
+          ],
+          "port": "{{port}}",
+          "path": [
+            "retrieve"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Retrieve - README Case Order Status Cancel",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": \"订单处于什么状态的时候，才允许被取消？\",\n  \"domains\": [\"order-center\"]\n}"
+        },
+        "url": {
+          "raw": "{{protocol}}://{{host}}:{{port}}/retrieve",
+          "protocol": "{{protocol}}",
+          "host": [
+            "{{host}}"
+          ],
+          "port": "{{port}}",
+          "path": [
+            "retrieve"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Retrieve - User Center",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": \"用户登录失败，怎么排查权限问题？\",\n  \"domains\": [\"user-center\"]\n}"
+        },
+        "url": {
+          "raw": "{{protocol}}://{{host}}:{{port}}/retrieve",
+          "protocol": "{{protocol}}",
+          "host": [
+            "{{host}}"
+          ],
+          "port": "{{port}}",
+          "path": [
+            "retrieve"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Retrieve - README Case Login Params",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": \"前端调登录接口的时候，需要传哪些参数？如果密码输错了会返回什么错误码？\",\n  \"domains\": [\"user-center\"]\n}"
+        },
+        "url": {
+          "raw": "{{protocol}}://{{host}}:{{port}}/retrieve",
+          "protocol": "{{protocol}}",
+          "host": [
+            "{{host}}"
+          ],
+          "port": "{{port}}",
+          "path": [
+            "retrieve"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Retrieve - README Case Order Amount Field",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": \"订单表里的金额字段叫什么？它的数据类型和单位是什么？\",\n  \"domains\": [\"order-center\"]\n}"
+        },
+        "url": {
+          "raw": "{{protocol}}://{{host}}:{{port}}/retrieve",
+          "protocol": "{{protocol}}",
+          "host": [
+            "{{host}}"
+          ],
+          "port": "{{port}}",
+          "path": [
+            "retrieve"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Retrieve - README Case Dual Token Reason",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": \"为什么我们系统要搞 Access Token 和 Refresh Token 两个 Token？只用一个不行吗？\",\n  \"domains\": [\"user-center\"]\n}"
+        },
+        "url": {
+          "raw": "{{protocol}}://{{host}}:{{port}}/retrieve",
+          "protocol": "{{protocol}}",
+          "host": [
+            "{{host}}"
+          ],
+          "port": "{{port}}",
+          "path": [
+            "retrieve"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Retrieve - README Case Order ID Strategy",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": \"后端在写创建订单接口的时候，订单号可以直接用数据库的自增 ID 吗？为什么？\",\n  \"domains\": [\"order-center\"]\n}"
+        },
+        "url": {
+          "raw": "{{protocol}}://{{host}}:{{port}}/retrieve",
+          "protocol": "{{protocol}}",
+          "host": [
+            "{{host}}"
+          ],
+          "port": "{{port}}",
+          "path": [
+            "retrieve"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Retrieve - README Case Order Timeout",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": \"如果用户下单了但一直不付款，这笔订单会怎么处理？会不会一直占着库存？\",\n  \"domains\": [\"order-center\"]\n}"
+        },
+        "url": {
+          "raw": "{{protocol}}://{{host}}:{{port}}/retrieve",
+          "protocol": "{{protocol}}",
+          "host": [
+            "{{host}}"
+          ],
+          "port": "{{port}}",
+          "path": [
+            "retrieve"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Retrieve - Global Search",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": \"如何配置系统的工作流说明？\",\n  \"domains\": []\n}"
+        },
+        "url": {
+          "raw": "{{protocol}}://{{host}}:{{port}}/retrieve",
+          "protocol": "{{protocol}}",
+          "host": [
+            "{{host}}"
+          ],
+          "port": "{{port}}",
+          "path": [
+            "retrieve"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Retrieve - README Case Cross Module Checkout",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": \"当用户在 App 里面点击提交订单后，到最终支付成功，这中间的系统调用链路是怎样的？状态是怎么变的？\",\n  \"domains\": [\"global\", \"order-center\"]\n}"
+        },
+        "url": {
+          "raw": "{{protocol}}://{{host}}:{{port}}/retrieve",
+          "protocol": "{{protocol}}",
+          "host": [
+            "{{host}}"
+          ],
+          "port": "{{port}}",
+          "path": [
+            "retrieve"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Retrieve - README Case 401 Refresh Flow",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": \"如果前端请求下单接口的时候，报了 401 错误，前端应该怎么做？需要让用户重新输入账号密码吗？\",\n  \"domains\": [\"user-center\", \"order-center\"]\n}"
+        },
+        "url": {
+          "raw": "{{protocol}}://{{host}}:{{port}}/retrieve",
+          "protocol": "{{protocol}}",
+          "host": [
+            "{{host}}"
+          ],
+          "port": "{{port}}",
+          "path": [
+            "retrieve"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Retrieve - README Case Email Required",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": \"登录接口里面，email 字段是必填的吗？\",\n  \"domains\": [\"user-center\"]\n}"
+        },
+        "url": {
+          "raw": "{{protocol}}://{{host}}:{{port}}/retrieve",
+          "protocol": "{{protocol}}",
+          "host": [
+            "{{host}}"
+          ],
+          "port": "{{port}}",
+          "path": [
+            "retrieve"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Retrieve - README Case Logistics Unknown",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": \"商家发货后，怎么对接顺丰快递的 API 获取物流单号？\",\n  \"domains\": [\"order-center\"]\n}"
+        },
+        "url": {
+          "raw": "{{protocol}}://{{host}}:{{port}}/retrieve",
+          "protocol": "{{protocol}}",
+          "host": [
+            "{{host}}"
+          ],
+          "port": "{{port}}",
+          "path": [
+            "retrieve"
+          ]
+        }
+      }
+    }
+  ]
+}

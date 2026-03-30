@@ -1,0 +1,1503 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RAG Document Maintenance Dashboard</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+
+    <style>
+      :root {
+        --bg-top: #f8f4e3;
+        --bg-bottom: #dff4ea;
+        --card: rgba(255, 255, 255, 0.88);
+        --ink: #1e2433;
+        --accent: #0b7a75;
+        --accent-2: #f25f4c;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Space Grotesk", "Noto Sans SC", sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 10% 10%, rgba(242, 95, 76, 0.18), transparent 38%),
+          radial-gradient(circle at 90% 15%, rgba(11, 122, 117, 0.2), transparent 42%),
+          linear-gradient(160deg, var(--bg-top), var(--bg-bottom));
+        min-height: 100vh;
+      }
+
+      #root {
+        min-height: 100vh;
+      }
+
+      .glass-card {
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+      }
+
+      .json-block {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+
+      @keyframes rise {
+        from {
+          opacity: 0;
+          transform: translateY(8px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      .rise {
+        animation: rise 360ms ease-out;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@emotion/react@11/dist/emotion-react.umd.min.js"></script>
+    <script src="https://unpkg.com/@emotion/styled@11/dist/emotion-styled.umd.min.js"></script>
+    <script src="https://unpkg.com/@mui/material@5.15.20/umd/material-ui.development.js"></script>
+    <script>
+      (function () {
+        const root = document.getElementById("root");
+
+        function showBootError(message) {
+          root.innerHTML = `
+            <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;font-family:'Space Grotesk','Noto Sans SC',sans-serif;">
+              <div style="max-width:760px;width:100%;background:rgba(255,255,255,0.92);border:1px solid rgba(30,36,51,0.16);border-radius:24px;padding:24px;box-shadow:0 20px 60px rgba(30,36,51,0.14);">
+                <h1 style="margin:0 0 12px;font-size:28px;color:#1e2433;">Dashboard failed to load</h1>
+                <p style="margin:0 0 12px;color:#4a5568;line-height:1.6;">The page could not initialize the Google Material UI runtime. Check the browser console or network panel for blocked CDN scripts.</p>
+                <pre style="margin:0;white-space:pre-wrap;word-break:break-word;background:#f8fbfd;border-radius:16px;padding:16px;color:#8a1c1c;">${String(message)}</pre>
+              </div>
+            </div>
+          `;
+        }
+
+        if (!window.React || !window.ReactDOM || !window.MaterialUI) {
+          showBootError("React, ReactDOM, or MaterialUI was not loaded.");
+          return;
+        }
+
+        const h = React.createElement;
+        const {
+          Alert,
+          AppBar,
+          Autocomplete,
+          Box,
+          Button,
+          Card,
+          CardContent,
+          Chip,
+          CircularProgress,
+          Container,
+          CssBaseline,
+          Divider,
+          GlobalStyles,
+          List,
+          ListItemButton,
+          ListItemText,
+          Paper,
+          Stack,
+          Tab,
+          Tabs,
+          TextField,
+          ThemeProvider,
+          Tooltip,
+          Toolbar,
+          Typography,
+          createTheme,
+        } = MaterialUI;
+
+        const DOMAIN_OPTIONS = ["global", "order-center", "user-center"];
+        const SCRIPT_ITEMS = [
+          { name: "Ingest - Build Index", method: "POST", path: "/ingest" },
+          { name: "Clear - Empty Index", method: "POST", path: "/clear" },
+          { name: "Rebuild - Reset And Reingest", method: "POST", path: "/rebuild" },
+          { name: "Stats - Chunk Statistics", method: "GET", path: "/chunks/stats" },
+          {
+            name: "Retrieve - Order Center",
+            method: "POST",
+            path: "/retrieve",
+            body: {
+              query: "订单创建后怎么查询发货物流状态？",
+              domains: ["order-center"],
+            },
+          },
+          {
+            name: "Retrieve - README Case Order Status Cancel",
+            method: "POST",
+            path: "/retrieve",
+            body: {
+              query: "订单处于什么状态的时候，才允许被取消？",
+              domains: ["order-center"],
+            },
+          },
+          {
+            name: "Retrieve - User Center",
+            method: "POST",
+            path: "/retrieve",
+            body: {
+              query: "用户登录失败，怎么排查权限问题？",
+              domains: ["user-center"],
+            },
+          },
+          {
+            name: "Retrieve - README Case Login Params",
+            method: "POST",
+            path: "/retrieve",
+            body: {
+              query: "前端调登录接口的时候，需要传哪些参数？如果密码输错了会返回什么错误码？",
+              domains: ["user-center"],
+            },
+          },
+          {
+            name: "Retrieve - README Case Order Amount Field",
+            method: "POST",
+            path: "/retrieve",
+            body: {
+              query: "订单表里的金额字段叫什么？它的数据类型和单位是什么？",
+              domains: ["order-center"],
+            },
+          },
+          {
+            name: "Retrieve - README Case Dual Token Reason",
+            method: "POST",
+            path: "/retrieve",
+            body: {
+              query: "为什么我们系统要搞 Access Token 和 Refresh Token 两个 Token？只用一个不行吗？",
+              domains: ["user-center"],
+            },
+          },
+          {
+            name: "Retrieve - README Case Order ID Strategy",
+            method: "POST",
+            path: "/retrieve",
+            body: {
+              query: "后端在写创建订单接口的时候，订单号可以直接用数据库的自增 ID 吗？为什么？",
+              domains: ["order-center"],
+            },
+          },
+          {
+            name: "Retrieve - README Case Order Timeout",
+            method: "POST",
+            path: "/retrieve",
+            body: {
+              query: "如果用户下单了但一直不付款，这笔订单会怎么处理？会不会一直占着库存？",
+              domains: ["order-center"],
+            },
+          },
+          {
+            name: "Retrieve - Global Search",
+            method: "POST",
+            path: "/retrieve",
+            body: {
+              query: "如何配置系统的工作流说明？",
+              domains: [],
+            },
+          },
+          {
+            name: "Retrieve - README Case Cross Module Checkout",
+            method: "POST",
+            path: "/retrieve",
+            body: {
+              query: "当用户在 App 里面点击提交订单后，到最终支付成功，这中间的系统调用链路是怎样的？状态是怎么变的？",
+              domains: ["global", "order-center"],
+            },
+          },
+          {
+            name: "Retrieve - README Case 401 Refresh Flow",
+            method: "POST",
+            path: "/retrieve",
+            body: {
+              query: "如果前端请求下单接口的时候，报了 401 错误，前端应该怎么做？需要让用户重新输入账号密码吗？",
+              domains: ["user-center", "order-center"],
+            },
+          },
+          {
+            name: "Retrieve - README Case Email Required",
+            method: "POST",
+            path: "/retrieve",
+            body: {
+              query: "登录接口里面，email 字段是必填的吗？",
+              domains: ["user-center"],
+            },
+          },
+          {
+            name: "Retrieve - README Case Logistics Unknown",
+            method: "POST",
+            path: "/retrieve",
+            body: {
+              query: "商家发货后，怎么对接顺丰快递的 API 获取物流单号？",
+              domains: ["order-center"],
+            },
+          },
+        ];
+
+        const initialProtocol = window.location.protocol && window.location.protocol !== "file:"
+          ? window.location.protocol.replace(":", "")
+          : "http";
+        const initialHost = window.location.hostname || "127.0.0.1";
+        const initialPort = window.location.port || "8000";
+
+        const theme = createTheme({
+          palette: {
+            mode: "light",
+            primary: { main: "#0b7a75" },
+            secondary: { main: "#f25f4c" },
+            warning: { main: "#d97706" },
+            background: {
+              default: "transparent",
+              paper: "rgba(255,255,255,0.88)",
+            },
+          },
+          shape: { borderRadius: 18 },
+          typography: {
+            fontFamily: '"Space Grotesk", "Noto Sans SC", sans-serif',
+            h4: { fontWeight: 700, letterSpacing: -0.4 },
+            h6: { fontWeight: 700 },
+            button: { fontWeight: 700, textTransform: "none" },
+          },
+          components: {
+            MuiPaper: {
+              styleOverrides: {
+                root: {
+                  backdropFilter: "blur(10px)",
+                  WebkitBackdropFilter: "blur(10px)",
+                },
+              },
+            },
+            MuiButton: {
+              defaultProps: { disableElevation: true },
+              styleOverrides: {
+                root: {
+                  borderRadius: 14,
+                  paddingLeft: 16,
+                  paddingRight: 16,
+                },
+              },
+            },
+          },
+        });
+
+        function buildBaseUrl(protocol, host, port) {
+          return `${protocol}://${host}:${port}`;
+        }
+
+        function pretty(data) {
+          if (typeof data === "string") return data;
+          return JSON.stringify(data, null, 2);
+        }
+
+        async function callApi(config) {
+          const res = await fetch(`${config.baseUrl}${config.path}`, {
+            method: config.method,
+            headers: { "Content-Type": "application/json" },
+            body: config.method === "GET" ? undefined : config.body ? JSON.stringify(config.body) : undefined,
+          });
+
+          let payload;
+          try {
+            payload = await res.json();
+          } catch (_error) {
+            payload = await res.text();
+          }
+
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status}: ${pretty(payload)}`);
+          }
+
+          return payload;
+        }
+
+        class ErrorBoundary extends React.Component {
+          constructor(props) {
+            super(props);
+            this.state = { error: null };
+          }
+
+          static getDerivedStateFromError(error) {
+            return { error };
+          }
+
+          componentDidCatch(error) {
+            console.error(error);
+          }
+
+          render() {
+            if (this.state.error) {
+              return h(
+                Container,
+                { maxWidth: "md", sx: { py: 6 } },
+                h(
+                  Paper,
+                  { elevation: 0, sx: { p: 3, border: "1px solid rgba(30,36,51,0.12)" } },
+                  h(Typography, { variant: "h4", sx: { mb: 2 } }, "Material UI Runtime Error"),
+                  h(Alert, { severity: "error", sx: { mb: 2 } }, this.state.error.message || String(this.state.error)),
+                  h(Typography, { variant: "body2", color: "text.secondary" }, "Check browser DevTools for the full stack trace.")
+                )
+              );
+            }
+
+            return this.props.children;
+          }
+        }
+
+        function DashboardSection(props) {
+          return h(
+            Paper,
+            {
+              className: "rise",
+              elevation: 0,
+              sx: {
+                p: 2.25,
+                borderRadius: 4,
+                border: "1px solid rgba(30,36,51,0.12)",
+                bgcolor: "background.paper",
+                ...props.sx,
+              },
+            },
+            props.children
+          );
+        }
+
+        function formatSourceLabel(source) {
+          return source === "env" ? "环境变量" : "配置文件";
+        }
+
+        function TooltipLabel(props) {
+          return h(
+            Tooltip,
+            {
+              title: props.tooltip || "",
+              arrow: true,
+              placement: "top",
+            },
+            h(
+              Box,
+              {
+                component: "span",
+                sx: {
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 0.5,
+                  cursor: "help",
+                  borderBottom: props.tooltip ? "1px dashed rgba(30,36,51,0.28)" : "none",
+                },
+              },
+              h(Typography, { variant: props.variant || "body2", sx: props.sx || null }, props.children),
+              props.tooltip
+                ? h(
+                    Box,
+                    {
+                      component: "span",
+                      sx: {
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        width: 16,
+                        height: 16,
+                        borderRadius: "50%",
+                        bgcolor: "rgba(30,36,51,0.08)",
+                        color: "rgba(30,36,51,0.72)",
+                        fontSize: 11,
+                        fontWeight: 700,
+                        lineHeight: 1,
+                      },
+                    },
+                    "?"
+                  )
+                : null
+            )
+          );
+        }
+
+        function ConfigStatCard(props) {
+          return h(
+            Paper,
+            {
+              variant: "outlined",
+              sx: {
+                p: 1.4,
+                borderRadius: 3,
+                bgcolor: props.bgcolor || "rgba(11,122,117,0.04)",
+                borderColor: props.borderColor || "rgba(30,36,51,0.12)",
+                minHeight: "100%",
+              },
+            },
+            h(Typography, { variant: "caption", sx: { opacity: 0.72 } }, props.eyebrow),
+            h(Typography, { variant: "body1", sx: { fontWeight: 700, mt: 0.6, mb: 1 } }, props.title),
+            h(Stack, { spacing: 0.75 }, props.children)
+          );
+        }
+
+        function ConfigRow(props) {
+          const severityStyles = props.severity === "error"
+            ? {
+                bgcolor: "rgba(211, 47, 47, 0.08)",
+                border: "1px solid rgba(211, 47, 47, 0.16)",
+                labelColor: "#9f1239",
+                valueColor: "#7f1d1d",
+              }
+            : props.severity === "warning"
+              ? {
+                  bgcolor: "rgba(217, 119, 6, 0.08)",
+                  border: "1px solid rgba(217, 119, 6, 0.16)",
+                  labelColor: "#9a3412",
+                  valueColor: "#92400e",
+                }
+              : {
+                  bgcolor: "transparent",
+                  border: "1px solid transparent",
+                  labelColor: "inherit",
+                  valueColor: "inherit",
+                };
+
+          return h(
+            Box,
+            {
+              sx: {
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "flex-start",
+                gap: 1,
+                px: 0.8,
+                py: 0.55,
+                borderRadius: 2,
+                bgcolor: severityStyles.bgcolor,
+                border: severityStyles.border,
+              },
+            },
+            h(TooltipLabel, {
+              variant: "body2",
+              tooltip: props.tooltip,
+              sx: { opacity: 0.72, minWidth: 92, color: severityStyles.labelColor },
+            }, props.label),
+            h(
+              Typography,
+              {
+                variant: "body2",
+                sx: {
+                  fontWeight: props.emphasis ? 700 : 500,
+                  textAlign: "right",
+                  wordBreak: "break-word",
+                  color: severityStyles.valueColor,
+                  fontFamily: props.mono ? 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' : 'inherit',
+                },
+              },
+              props.value
+            )
+          );
+        }
+
+        function App() {
+          const [protocol, setProtocol] = React.useState(initialProtocol);
+          const [host, setHost] = React.useState(initialHost);
+          const [port, setPort] = React.useState(initialPort);
+          const [activePage, setActivePage] = React.useState("maintenance");
+          const [sourceFile, setSourceFile] = React.useState("");
+          const [docOptions, setDocOptions] = React.useState([]);
+          const [moduleGroups, setModuleGroups] = React.useState([]);
+          const [expandedModules, setExpandedModules] = React.useState({});
+          const [docKeyword, setDocKeyword] = React.useState("");
+          const [retrieveQuery, setRetrieveQuery] = React.useState("");
+          const [retrieveDomains, setRetrieveDomains] = React.useState([]);
+          const [busy, setBusy] = React.useState(false);
+          const [configBusy, setConfigBusy] = React.useState(false);
+          const [runtimeConfig, setRuntimeConfig] = React.useState(null);
+          const [configError, setConfigError] = React.useState("");
+          const [showConfigJson, setShowConfigJson] = React.useState(false);
+          const [error, setError] = React.useState("");
+          const [result, setResult] = React.useState({ message: "请选择文档并执行操作。" });
+
+          const baseUrl = React.useMemo(function () {
+            return buildBaseUrl(protocol, host, port);
+          }, [protocol, host, port]);
+
+          async function runAction(action) {
+            setBusy(true);
+            setError("");
+            try {
+              const data = await action();
+              setResult(data);
+            } catch (runtimeError) {
+              setError(runtimeError.message || String(runtimeError));
+            } finally {
+              setBusy(false);
+            }
+          }
+
+          function runListDocuments() {
+            return runAction(async function () {
+              const groupedData = await callApi({ baseUrl: baseUrl, method: "GET", path: "/docs/grouped" });
+              const modules = (groupedData && groupedData.modules) || [];
+              const docs = modules.flatMap(function (item) {
+                return item.source_files || [];
+              });
+
+              setModuleGroups(modules);
+              setExpandedModules(function (prev) {
+                const next = {};
+                modules.forEach(function (item) {
+                  next[item.domain] = Object.prototype.hasOwnProperty.call(prev, item.domain)
+                    ? !!prev[item.domain]
+                    : true;
+                });
+                return next;
+              });
+              setDocOptions(docs);
+              if (!sourceFile && docs.length > 0) {
+                setSourceFile(docs[0]);
+              }
+              return {
+                message: `已从向量库加载 ${modules.length} 个模块，${docs.length} 份文档。`,
+                modules: modules,
+                documents: docs,
+              };
+            });
+          }
+
+          async function loadRuntimeConfig() {
+            setConfigBusy(true);
+            setConfigError("");
+            try {
+              const data = await callApi({ baseUrl: baseUrl, method: "GET", path: "/config" });
+              setRuntimeConfig(data);
+            } catch (runtimeError) {
+              setConfigError(runtimeError.message || String(runtimeError));
+            } finally {
+              setConfigBusy(false);
+            }
+          }
+
+          function runStats() {
+            return runAction(function () {
+              return callApi({ baseUrl: baseUrl, method: "GET", path: "/chunks/stats" });
+            });
+          }
+
+          function runRetrieve(query, domains) {
+            const cleanedQuery = String(query || "").trim();
+            if (!cleanedQuery) {
+              setError("请输入检索问题（query）。");
+              return;
+            }
+
+            return runAction(function () {
+              return callApi({
+                baseUrl: baseUrl,
+                method: "POST",
+                path: "/retrieve",
+                body: {
+                  query: cleanedQuery,
+                  domains: Array.isArray(domains) ? domains : [],
+                },
+              });
+            });
+          }
+
+          function runRetrieveWithCurrentInput() {
+            return runRetrieve(retrieveQuery, retrieveDomains);
+          }
+
+          function runRetrieveCase(item) {
+            const body = (item && item.body) || {};
+            const query = body.query || "";
+            const domains = Array.isArray(body.domains) ? body.domains : [];
+            setRetrieveQuery(query);
+            setRetrieveDomains(domains);
+            return runRetrieve(query, domains);
+          }
+
+          function getSelectedSourceFile() {
+            const cleaned = String(sourceFile || "").trim();
+            if (!cleaned) {
+              setError("请先选择或输入文档路径。");
+              return "";
+            }
+            return cleaned;
+          }
+
+          function runDeleteBySourceFile() {
+            const cleaned = getSelectedSourceFile();
+            if (!cleaned) {
+              return;
+            }
+
+            if (!window.confirm(`确认删除文档索引？\n${cleaned}`)) {
+              return;
+            }
+
+            return runAction(function () {
+              return callApi({
+                baseUrl: baseUrl,
+                method: "POST",
+                path: "/docs/delete",
+                body: { source_file: cleaned },
+              });
+            });
+          }
+
+          function runRebuild() {
+            if (!window.confirm("确认执行全量重建索引？该操作将先清空再重建全部文档索引。")) {
+              return;
+            }
+
+            return runAction(function () {
+              return callApi({ baseUrl: baseUrl, method: "POST", path: "/rebuild" });
+            });
+          }
+
+          function runUpdateBySourceFile() {
+            const cleaned = getSelectedSourceFile();
+            if (!cleaned) {
+              return;
+            }
+
+            return runAction(function () {
+              return callApi({
+                baseUrl: baseUrl,
+                method: "POST",
+                path: "/docs/update",
+                body: { source_file: cleaned },
+              });
+            });
+          }
+
+          function runGetDocumentContent() {
+            const cleaned = getSelectedSourceFile();
+            if (!cleaned) {
+              return;
+            }
+
+            return runAction(function () {
+              return callApi({
+                baseUrl: baseUrl,
+                method: "GET",
+                path: `/docs/content/${cleaned}`,
+              });
+            });
+          }
+
+          React.useEffect(function () {
+            runListDocuments();
+            loadRuntimeConfig();
+          }, [baseUrl]);
+
+          function toggleModule(domain) {
+            setExpandedModules(function (prev) {
+              return Object.assign({}, prev, { [domain]: !prev[domain] });
+            });
+          }
+
+          const selectedLabel = sourceFile || "未选择文档";
+          const statusLabel = busy ? "执行中" : "待命";
+          const retrieveCases = React.useMemo(function () {
+            return SCRIPT_ITEMS.filter(function (item) {
+              return item.path === "/retrieve";
+            });
+          }, []);
+          const availableDomains = React.useMemo(function () {
+            const dynamicDomains = moduleGroups.map(function (group) {
+              return String(group.domain || "");
+            }).filter(Boolean);
+            return Array.from(new Set(DOMAIN_OPTIONS.concat(dynamicDomains)));
+          }, [moduleGroups]);
+          const filteredModuleGroups = React.useMemo(function () {
+            const keyword = docKeyword.trim().toLowerCase();
+            if (!keyword) {
+              return moduleGroups;
+            }
+
+            return moduleGroups
+              .map(function (group) {
+                const domain = String(group.domain || "");
+                if (domain.toLowerCase().indexOf(keyword) >= 0) {
+                  return group;
+                }
+
+                const files = (group.source_files || []).filter(function (file) {
+                  return String(file).toLowerCase().indexOf(keyword) >= 0;
+                });
+
+                return Object.assign({}, group, {
+                  source_files: files,
+                  document_count: files.length,
+                });
+              })
+              .filter(function (group) {
+                return (group.source_files || []).length > 0;
+              });
+          }, [docKeyword, moduleGroups]);
+          const retrievalConfig = runtimeConfig && runtimeConfig.retrieval ? runtimeConfig.retrieval : null;
+          const accessConfig = runtimeConfig && runtimeConfig.access_control ? runtimeConfig.access_control : null;
+          const chunkingConfig = runtimeConfig && runtimeConfig.chunking ? runtimeConfig.chunking : null;
+          const indexingConfig = runtimeConfig && runtimeConfig.indexing ? runtimeConfig.indexing : null;
+          const dashboardConfig = runtimeConfig && runtimeConfig.dashboard ? runtimeConfig.dashboard : null;
+          const pathConfig = runtimeConfig && runtimeConfig.paths ? runtimeConfig.paths : null;
+          const configSources = runtimeConfig && runtimeConfig.config_sources ? runtimeConfig.config_sources : {};
+          const configHealth = runtimeConfig && runtimeConfig.health ? runtimeConfig.health : null;
+          const configAlerts = configHealth && Array.isArray(configHealth.alerts) ? configHealth.alerts : [];
+
+          function getFieldSeverity(key) {
+            const fieldSeverities = configHealth && configHealth.field_severities ? configHealth.field_severities : null;
+            return fieldSeverities && fieldSeverities[key] ? fieldSeverities[key] : null;
+          }
+
+          return h(
+            React.Fragment,
+            null,
+            h(CssBaseline),
+            h(GlobalStyles, {
+              styles: {
+                body: {
+                  background:
+                    "radial-gradient(circle at 10% 10%, rgba(242, 95, 76, 0.18), transparent 38%), radial-gradient(circle at 90% 15%, rgba(11, 122, 117, 0.20), transparent 42%), linear-gradient(160deg, #f8f4e3, #dff4ea)",
+                },
+              },
+            }),
+            h(
+              AppBar,
+              {
+                position: "sticky",
+                elevation: 0,
+                sx: {
+                  background: "linear-gradient(95deg, #0b7a75, #1e5e85)",
+                  borderBottom: "1px solid rgba(255,255,255,0.2)",
+                },
+              },
+              h(
+                Toolbar,
+                {
+                  sx: {
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 2,
+                    alignItems: { xs: "flex-start", md: "center" },
+                    flexDirection: { xs: "column", md: "row" },
+                    py: 1,
+                  },
+                },
+                h(
+                  Box,
+                  null,
+                  h(Typography, { variant: "h4", sx: { fontSize: { xs: 24, md: 32 } } }, "知识库文档运维台"),
+                  h(
+                    Typography,
+                    { variant: "body2", sx: { opacity: 0.92, mt: 0.5, maxWidth: 820 } },
+                    "面向系统管理员：以风险分区方式集中执行文档维护与索引治理。"
+                  )
+                ),
+                h(Chip, {
+                  label: `服务地址: ${baseUrl}`,
+                  sx: { bgcolor: "rgba(255,255,255,0.18)", color: "#fff", fontWeight: 700 },
+                })
+              )
+            ),
+            h(
+              Container,
+              { maxWidth: "xl", sx: { py: 3 } },
+              h(
+                DashboardSection,
+                { sx: { p: 1.2, mb: 2.5 } },
+                h(
+                  Tabs,
+                  {
+                    value: activePage,
+                    onChange: function (_event, nextValue) {
+                      setActivePage(nextValue);
+                      setError("");
+                    },
+                    variant: "scrollable",
+                    scrollButtons: "auto",
+                  },
+                  h(Tab, {
+                    value: "maintenance",
+                    label: "文档维护",
+                  }),
+                  h(Tab, {
+                    value: "retrieve",
+                    label: "检索测试",
+                  })
+                )
+              ),
+              h(
+                Box,
+                {
+                  sx: {
+                    display: "grid",
+                    gridTemplateColumns: { xs: "1fr", md: "repeat(3, minmax(0, 1fr))" },
+                    gap: 1.5,
+                    mb: 2.5,
+                  },
+                },
+                h(
+                  DashboardSection,
+                  { sx: { p: 1.75 } },
+                  h(Typography, { variant: "caption", sx: { opacity: 0.75 } }, "当前状态"),
+                  h(Typography, { variant: "h6" }, statusLabel)
+                ),
+                h(
+                  DashboardSection,
+                  { sx: { p: 1.75 } },
+                  h(Typography, { variant: "caption", sx: { opacity: 0.75 } }, "可维护文档"),
+                  h(Typography, { variant: "h6" }, `${docOptions.length} 份`)
+                ),
+                h(
+                  DashboardSection,
+                  { sx: { p: 1.75 } },
+                  h(Typography, { variant: "caption", sx: { opacity: 0.75 } }, "选中文档"),
+                  h(Typography, { variant: "body1", sx: { fontWeight: 700, wordBreak: "break-all" } }, selectedLabel)
+                )
+              ),
+              activePage === "maintenance"
+                ? h(
+                    Box,
+                    {
+                      sx: {
+                        display: "grid",
+                        gridTemplateColumns: { xs: "1fr", lg: "420px minmax(0, 1fr)" },
+                        gap: 2.5,
+                        alignItems: "start",
+                      },
+                    },
+                    h(
+                      Stack,
+                      { spacing: 2.5 },
+                      h(
+                        DashboardSection,
+                        null,
+                        h(Typography, { variant: "h6", sx: { mb: 1.2 } }, "系统连接"),
+                        h(
+                          Stack,
+                          { spacing: 1.5 },
+                          h(TextField, {
+                            label: "协议",
+                            value: protocol,
+                            onChange: function (event) {
+                              setProtocol(event.target.value.trim() || "http");
+                            },
+                            placeholder: "http",
+                            size: "small",
+                          }),
+                          h(TextField, {
+                            label: "主机",
+                            value: host,
+                            onChange: function (event) {
+                              setHost(event.target.value.trim() || "127.0.0.1");
+                            },
+                            placeholder: "127.0.0.1",
+                            size: "small",
+                          }),
+                          h(TextField, {
+                            label: "端口",
+                            value: port,
+                            onChange: function (event) {
+                              setPort(event.target.value.trim() || "8000");
+                            },
+                            placeholder: "8000",
+                            size: "small",
+                          }),
+                          h(
+                            Stack,
+                            { direction: "row", gap: 1, flexWrap: "wrap" },
+                            h(Button, { variant: "outlined", onClick: runListDocuments, disabled: busy }, "同步文档目录"),
+                            h(Button, { variant: "outlined", onClick: runStats, disabled: busy }, "查看索引统计")
+                          )
+                        )
+                      ),
+                      h(
+                        DashboardSection,
+                        null,
+                        h(
+                          Stack,
+                          { direction: "row", alignItems: "center", justifyContent: "space-between", sx: { mb: 1.2 }, flexWrap: "wrap", gap: 1 },
+                          h(Typography, { variant: "h6" }, "当前系统配置"),
+                          h(
+                            Stack,
+                            { direction: "row", gap: 1, flexWrap: "wrap" },
+                            h(Button, {
+                              variant: "text",
+                              onClick: function () {
+                                setShowConfigJson(function (prev) {
+                                  return !prev;
+                                });
+                              },
+                              disabled: configBusy,
+                            }, showConfigJson ? "隐藏原始 JSON" : "查看原始 JSON"),
+                            h(Button, { variant: "outlined", onClick: loadRuntimeConfig, disabled: configBusy || busy }, configBusy ? "刷新中..." : "刷新配置")
+                          )
+                        ),
+                        configError
+                          ? h(Alert, { severity: "error", sx: { mb: 1.5 } }, configError)
+                          : h(Alert, { severity: "info", sx: { mb: 1.5 } }, "展示 /config 当前生效值，便于前端确认开关状态和排查环境覆盖。"),
+                        runtimeConfig
+                          ? h(
+                              Stack,
+                              { spacing: 1.5 },
+                              configAlerts.length > 0
+                                ? h(
+                                    Stack,
+                                    { spacing: 1 },
+                                    configAlerts.map(function (item, index) {
+                                      return h(
+                                        Alert,
+                                        {
+                                          key: `${item.severity}:${index}`,
+                                          severity: item.severity,
+                                          sx: { borderRadius: 3 },
+                                        },
+                                        h(Typography, { variant: "body2", sx: { fontWeight: 700, mb: 0.35 } }, item.title),
+                                        h(Typography, { variant: "body2" }, item.message)
+                                      );
+                                    })
+                                  )
+                                : h(Alert, { severity: "success", sx: { borderRadius: 3 } }, "当前未发现明显的配置异常组合。"),
+                              h(
+                                Stack,
+                                { direction: "row", gap: 1, flexWrap: "wrap" },
+                                h(
+                                  Tooltip,
+                                  { title: "控制是否启用文档级访问控制。开启后，检索和文档查看都会按 ACL 规则过滤。", arrow: true },
+                                  h(Chip, {
+                                    color: accessConfig && accessConfig.enable_acl ? "warning" : "default",
+                                    variant: "outlined",
+                                    label: `ACL: ${accessConfig && accessConfig.enable_acl ? "开启" : "关闭"}`,
+                                  })
+                                ),
+                                h(
+                                  Tooltip,
+                                  { title: "控制是否启用 CrossEncoder 重排。开启后会在向量召回后再做精排。", arrow: true },
+                                  h(Chip, {
+                                    color: retrievalConfig && retrievalConfig.reranker_enabled ? "success" : "default",
+                                    variant: "outlined",
+                                    label: `Reranker: ${retrievalConfig && retrievalConfig.reranker_enabled ? "开启" : "关闭"}`,
+                                  })
+                                ),
+                                h(
+                                  Tooltip,
+                                  { title: "控制是否对 Markdown 大块内容继续做更细粒度切分。开启后会增加 chunk 数量。", arrow: true },
+                                  h(Chip, {
+                                    color: chunkingConfig && chunkingConfig.enable_sub_chunking ? "secondary" : "default",
+                                    variant: "outlined",
+                                    label: `子分块: ${chunkingConfig && chunkingConfig.enable_sub_chunking ? "开启" : "关闭"}`,
+                                  })
+                                )
+                              ),
+                              h(
+                                Box,
+                                {
+                                  sx: {
+                                    display: "grid",
+                                    gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" },
+                                    gap: 1.25,
+                                  },
+                                },
+                                h(
+                                  ConfigStatCard,
+                                  {
+                                    eyebrow: "检索",
+                                    title: "召回与重排参数",
+                                    bgcolor: "rgba(11,122,117,0.04)",
+                                  },
+                                  h(ConfigRow, {
+                                    label: "Recall K",
+                                    value: retrievalConfig ? String(retrievalConfig.retrieval_k) : "-",
+                                    emphasis: true,
+                                    tooltip: "向量检索第一阶段的召回条数。数值越大，候选越多，但检索和后处理开销也会增大。",
+                                  }),
+                                  h(ConfigRow, {
+                                    label: "Context K",
+                                    value: retrievalConfig ? String(retrievalConfig.final_context_k) : "-",
+                                    tooltip: "最终传给大模型的上下文片段数量。这个值直接影响回答时可见的知识片段数。",
+                                  }),
+                                  h(ConfigRow, {
+                                    label: "Candidate K",
+                                    value: retrievalConfig ? String(retrievalConfig.rerank_candidate_k) : "-",
+                                    tooltip: "进入 reranker 精排前的候选文档数。启用 reranker 时通常会大于 Recall K。",
+                                  }),
+                                  h(ConfigRow, {
+                                    label: "设备",
+                                    value: retrievalConfig ? retrievalConfig.reranker_device : "-",
+                                    tooltip: "reranker 推理运行设备，例如 cpu 或 cuda。",
+                                    severity: getFieldSeverity("retrieval.reranker_device"),
+                                  }),
+                                  h(ConfigRow, {
+                                    label: "模型",
+                                    value: retrievalConfig ? retrievalConfig.reranker_model_name : "-",
+                                    mono: true,
+                                    tooltip: "当前 reranker 实际使用的模型名称或本地模型路径。",
+                                  })
+                                ),
+                                h(
+                                  ConfigStatCard,
+                                  {
+                                    eyebrow: "来源",
+                                    title: "当前配置来源",
+                                    bgcolor: "rgba(242,95,76,0.04)",
+                                  },
+                                  h(ConfigRow, {
+                                    label: "ACL",
+                                    value: formatSourceLabel(configSources.enable_acl),
+                                    emphasis: true,
+                                    tooltip: "表示 ENABLE_ACL 当前值来自配置文件默认值，还是来自启动时传入的环境变量。",
+                                  }),
+                                  h(ConfigRow, {
+                                    label: "Reranker",
+                                    value: formatSourceLabel(configSources.reranker_enabled),
+                                    tooltip: "表示 RERANKER_ENABLED 当前值的来源。",
+                                  }),
+                                  h(ConfigRow, {
+                                    label: "子分块",
+                                    value: formatSourceLabel(configSources.enable_sub_chunking),
+                                    tooltip: "表示 ENABLE_SUB_CHUNKING 当前值的来源。",
+                                  }),
+                                  h(ConfigRow, {
+                                    label: "Candidate K",
+                                    value: formatSourceLabel(configSources.rerank_candidate_k),
+                                    tooltip: "表示 RERANK_CANDIDATE_K 当前值的来源。",
+                                  }),
+                                  h(ConfigRow, {
+                                    label: "设备",
+                                    value: formatSourceLabel(configSources.reranker_device),
+                                    tooltip: "表示 RERANKER_DEVICE 当前值的来源。",
+                                  })
+                                ),
+                                h(
+                                  ConfigStatCard,
+                                  {
+                                    eyebrow: "权限与索引",
+                                    title: "权限与切分状态",
+                                    bgcolor: "rgba(30,94,133,0.05)",
+                                  },
+                                  h(ConfigRow, {
+                                    label: "ACL",
+                                    value: accessConfig && accessConfig.enable_acl ? "已启用" : "已关闭",
+                                    emphasis: true,
+                                    tooltip: "是否对文档读取和检索结果执行访问控制过滤。",
+                                    severity: getFieldSeverity("access_control.enable_acl"),
+                                  }),
+                                  h(ConfigRow, {
+                                    label: "映射文件",
+                                    value: accessConfig && accessConfig.username_group_mapping_exists ? "已检测到" : "未检测到",
+                                    tooltip: "用户名与权限组映射文件是否存在。ACL 开启后，这个文件通常用于解析用户所在组。",
+                                    severity: getFieldSeverity("access_control.username_group_mapping_exists"),
+                                  }),
+                                  h(ConfigRow, {
+                                    label: "子分块",
+                                    value: chunkingConfig && chunkingConfig.enable_sub_chunking ? "已启用" : "已关闭",
+                                    tooltip: "是否对初步切出的 Markdown 段落再做更细粒度的二次切分。",
+                                    severity: getFieldSeverity("chunking.enable_sub_chunking"),
+                                  }),
+                                  h(ConfigRow, {
+                                    label: "向量库",
+                                    value: indexingConfig ? indexingConfig.db_dir : "-",
+                                    mono: true,
+                                    tooltip: "当前 Chroma 向量库的存储目录。",
+                                  })
+                                ),
+                                h(
+                                  ConfigStatCard,
+                                  {
+                                    eyebrow: "运行环境",
+                                    title: "页面与路径状态",
+                                    bgcolor: "rgba(217,119,6,0.05)",
+                                  },
+                                  h(ConfigRow, {
+                                    label: "Dashboard",
+                                    value: dashboardConfig && dashboardConfig.dashboard_enabled ? "可用" : "不可用",
+                                    emphasis: true,
+                                    tooltip: "静态运维页面目录是否存在，决定 `/dashboard` 是否可以正常提供页面资源。",
+                                    severity: getFieldSeverity("dashboard.dashboard_enabled"),
+                                  }),
+                                  h(ConfigRow, {
+                                    label: "首页文件",
+                                    value: dashboardConfig && dashboardConfig.dashboard_index_exists ? "存在" : "缺失",
+                                    tooltip: "静态页入口文件 `static/index.html` 是否存在。",
+                                    severity: getFieldSeverity("dashboard.dashboard_index_exists"),
+                                  }),
+                                  h(ConfigRow, {
+                                    label: "Docs",
+                                    value: pathConfig ? pathConfig.docs_dir : "-",
+                                    mono: true,
+                                    tooltip: "知识库 Markdown 文档所在目录。",
+                                  }),
+                                  h(ConfigRow, {
+                                    label: "Group Map",
+                                    value: pathConfig ? pathConfig.username_group_mapping_file : "-",
+                                    mono: true,
+                                    tooltip: "用户名与权限组映射配置文件的实际路径。",
+                                  })
+                                )
+                              ),
+                              showConfigJson
+                                ? h(
+                                    React.Fragment,
+                                    null,
+                                    h(Divider, null),
+                                    h(
+                                      Paper,
+                                      { variant: "outlined", sx: { p: 1.25, borderRadius: 3, bgcolor: "#f8fbfd", maxHeight: 220, overflow: "auto" } },
+                                      h(Typography, { variant: "caption", sx: { opacity: 0.72, display: "block", mb: 0.8 } }, "原始配置响应"),
+                                      h("pre", { className: "json-block" }, pretty(runtimeConfig))
+                                    )
+                                  )
+                                : null
+                            )
+                          : h(
+                              Stack,
+                              { direction: "row", spacing: 1, alignItems: "center" },
+                              configBusy ? h(CircularProgress, { size: 18 }) : null,
+                              h(Typography, { variant: "body2", color: "text.secondary" }, configBusy ? "正在加载配置..." : "尚未加载配置")
+                            )
+                      ),
+                      h(
+                        DashboardSection,
+                        null,
+                        h(Typography, { variant: "h6", sx: { mb: 1.2 } }, "高风险操作区"),
+                        h(Alert, { severity: "warning", sx: { mb: 1.5 } }, "此区域会修改索引结构，请在低峰时段操作并确认变更单。"),
+                        h(
+                          Stack,
+                          { direction: "row", gap: 1, flexWrap: "wrap" },
+                          h(Button, { variant: "outlined", color: "warning", onClick: runDeleteBySourceFile, disabled: busy }, "删除当前文档索引"),
+                          h(Button, { variant: "contained", color: "secondary", onClick: runRebuild, disabled: busy }, "全量重建索引")
+                        )
+                      )
+                    ),
+                    h(
+                      Stack,
+                      { spacing: 2.5 },
+                      h(
+                        DashboardSection,
+                        null,
+                        h(Typography, { variant: "h6", sx: { mb: 2 } }, "文档维护操作"),
+                        h(
+                          Stack,
+                          { spacing: 1.5 },
+                          h(Autocomplete, {
+                            freeSolo: true,
+                            options: docOptions,
+                            openOnFocus: true,
+                            value: sourceFile,
+                            onChange: function (_event, value) {
+                              setSourceFile(value || "");
+                            },
+                            onInputChange: function (_event, value) {
+                              setSourceFile(value || "");
+                            },
+                            renderInput: function (params) {
+                              return h(TextField, Object.assign({}, params, {
+                                label: "文档路径（source_file）",
+                                placeholder: "例如: order-center/reference-db.md",
+                              }));
+                            },
+                          }),
+                          h(TextField, {
+                            label: "筛选文档列表",
+                            value: docKeyword,
+                            onChange: function (event) {
+                              setDocKeyword(event.target.value || "");
+                            },
+                            placeholder: "输入模块名或文件名，例如 order-center",
+                            size: "small",
+                          }),
+                          h(
+                            Paper,
+                            { variant: "outlined", sx: { borderRadius: 3, maxHeight: 260, overflow: "auto" } },
+                            filteredModuleGroups.length === 0
+                              ? h(Typography, { variant: "body2", sx: { p: 1.5, opacity: 0.7 } }, "向量库中暂无可展示模块，或当前筛选无匹配。")
+                              : filteredModuleGroups.map(function (group) {
+                                  const domain = String(group.domain || "unknown");
+                                  const files = group.source_files || [];
+                                  const expanded = expandedModules[domain] !== false;
+
+                                  return h(
+                                    Box,
+                                    {
+                                      key: domain,
+                                      sx: {
+                                        borderBottom: "1px solid rgba(30,36,51,0.08)",
+                                      },
+                                    },
+                                    h(
+                                      ListItemButton,
+                                      {
+                                        onClick: function () {
+                                          toggleModule(domain);
+                                        },
+                                        sx: {
+                                          bgcolor: "rgba(11,122,117,0.08)",
+                                          justifyContent: "space-between",
+                                        },
+                                      },
+                                      h(ListItemText, {
+                                        primary: `${domain} (${files.length})`,
+                                        primaryTypographyProps: {
+                                          sx: {
+                                            fontWeight: 700,
+                                            fontSize: 13,
+                                          },
+                                        },
+                                      }),
+                                      h(Chip, {
+                                        size: "small",
+                                        label: expanded ? "收起" : "展开",
+                                        variant: "outlined",
+                                      })
+                                    ),
+                                    expanded
+                                      ? h(
+                                          List,
+                                          { dense: true, disablePadding: true },
+                                          files.map(function (doc) {
+                                            const selected = doc === sourceFile;
+                                            return h(
+                                              ListItemButton,
+                                              {
+                                                key: `${domain}:${doc}`,
+                                                selected: selected,
+                                                onClick: function () {
+                                                  setSourceFile(doc);
+                                                },
+                                                sx: {
+                                                  pl: 2,
+                                                  borderTop: "1px solid rgba(30,36,51,0.06)",
+                                                  bgcolor: selected ? "rgba(11,122,117,0.14)" : "transparent",
+                                                },
+                                              },
+                                              h(ListItemText, {
+                                                primary: doc,
+                                                primaryTypographyProps: {
+                                                  sx: {
+                                                    fontFamily: '"Space Grotesk", "Noto Sans SC", sans-serif',
+                                                    fontWeight: selected ? 700 : 500,
+                                                    fontSize: 13,
+                                                    wordBreak: "break-all",
+                                                  },
+                                                },
+                                              })
+                                            );
+                                          })
+                                        )
+                                      : null
+                                  );
+                                })
+                          ),
+                          h(
+                            Stack,
+                            { direction: "row", gap: 1, flexWrap: "wrap" },
+                            h(Button, { variant: "contained", onClick: runGetDocumentContent, disabled: busy }, "查看原文"),
+                            h(Button, { variant: "contained", color: "secondary", onClick: runUpdateBySourceFile, disabled: busy }, "更新当前文档索引")
+                          )
+                        )
+                      ),
+                      h(
+                        DashboardSection,
+                        null,
+                        h(
+                          Stack,
+                          { direction: "row", alignItems: "center", justifyContent: "space-between", sx: { mb: 1.2 }, flexWrap: "wrap", gap: 1 },
+                          h(Typography, { variant: "h6" }, "执行结果与审计"),
+                          busy
+                            ? h(
+                                Stack,
+                                { direction: "row", spacing: 1, alignItems: "center" },
+                                h(CircularProgress, { size: 18 }),
+                                h(Typography, { variant: "body2" }, "处理中...")
+                              )
+                            : h(Chip, { label: "待命", color: "success", variant: "outlined" })
+                        ),
+                        error
+                          ? h(Alert, { severity: "error", sx: { mb: 1.5 } }, error)
+                          : h(Alert, { severity: "success", sx: { mb: 1.5 } }, "日志面板已就绪，可用于审计本次操作结果。"),
+                        h(
+                          Paper,
+                          { variant: "outlined", sx: { p: 1.5, maxHeight: 460, overflow: "auto", bgcolor: "#f8fbfd", borderRadius: 3 } },
+                          h("pre", { className: "json-block" }, pretty(result))
+                        )
+                      )
+                    )
+                  )
+                : h(
+                    Box,
+                    {
+                      sx: {
+                        display: "grid",
+                        gridTemplateColumns: { xs: "1fr", lg: "460px minmax(0, 1fr)" },
+                        gap: 2.5,
+                        alignItems: "start",
+                      },
+                    },
+                    h(
+                      Stack,
+                      { spacing: 2.5 },
+                      h(
+                        DashboardSection,
+                        null,
+                        h(Typography, { variant: "h6", sx: { mb: 1.2 } }, "检索请求"),
+                        h(
+                          Stack,
+                          { spacing: 1.5 },
+                          h(TextField, {
+                            multiline: true,
+                            minRows: 4,
+                            label: "问题（query）",
+                            value: retrieveQuery,
+                            onChange: function (event) {
+                              setRetrieveQuery(event.target.value || "");
+                            },
+                            placeholder: "例如：订单处于什么状态的时候，才允许被取消？",
+                          }),
+                          h(Autocomplete, {
+                            multiple: true,
+                            options: availableDomains,
+                            value: retrieveDomains,
+                            onChange: function (_event, value) {
+                              setRetrieveDomains(value || []);
+                            },
+                            renderInput: function (params) {
+                              return h(TextField, Object.assign({}, params, {
+                                label: "限定模块（domains）",
+                                placeholder: "留空表示全局检索",
+                              }));
+                            },
+                          }),
+                          h(
+                            Stack,
+                            { direction: "row", gap: 1, flexWrap: "wrap" },
+                            h(Button, { variant: "contained", onClick: runRetrieveWithCurrentInput, disabled: busy }, "执行检索"),
+                            h(Button, {
+                              variant: "outlined",
+                              disabled: busy,
+                              onClick: function () {
+                                setRetrieveQuery("");
+                                setRetrieveDomains([]);
+                                setError("");
+                                setResult({ message: "已清空检索请求条件。" });
+                              },
+                            }, "清空条件")
+                          )
+                        )
+                      ),
+                      h(
+                        DashboardSection,
+                        null,
+                        h(Typography, { variant: "h6", sx: { mb: 1.2 } }, "预置测试用例"),
+                        h(Alert, { severity: "info", sx: { mb: 1.5 } }, "点击任一用例会自动填充 query/domains 并立即调用 /retrieve。"),
+                        h(
+                          Paper,
+                          { variant: "outlined", sx: { borderRadius: 3, maxHeight: 420, overflow: "auto" } },
+                          h(
+                            List,
+                            { dense: true, disablePadding: true },
+                            retrieveCases.map(function (item) {
+                              const caseQuery = (item.body && item.body.query) || "";
+                              const caseDomains = (item.body && item.body.domains) || [];
+                              return h(
+                                ListItemButton,
+                                {
+                                  key: item.name,
+                                  onClick: function () {
+                                    runRetrieveCase(item);
+                                  },
+                                  sx: {
+                                    borderBottom: "1px solid rgba(30,36,51,0.08)",
+                                    alignItems: "flex-start",
+                                    py: 1.1,
+                                  },
+                                },
+                                h(
+                                  Stack,
+                                  { spacing: 0.8, sx: { width: "100%" } },
+                                  h(
+                                    Stack,
+                                    { direction: "row", justifyContent: "space-between", alignItems: "center", gap: 1 },
+                                    h(Typography, { variant: "body2", sx: { fontWeight: 700 } }, item.name),
+                                    h(Chip, {
+                                      size: "small",
+                                      variant: "outlined",
+                                      label: caseDomains.length > 0 ? caseDomains.join(", ") : "global",
+                                    })
+                                  ),
+                                  h(Typography, {
+                                    variant: "caption",
+                                    sx: {
+                                      opacity: 0.8,
+                                      lineHeight: 1.45,
+                                      display: "-webkit-box",
+                                      WebkitLineClamp: 2,
+                                      WebkitBoxOrient: "vertical",
+                                      overflow: "hidden",
+                                    },
+                                  }, caseQuery)
+                                )
+                              );
+                            })
+                          )
+                        )
+                      )
+                    ),
+                    h(
+                      DashboardSection,
+                      null,
+                      h(
+                        Stack,
+                        { direction: "row", alignItems: "center", justifyContent: "space-between", sx: { mb: 1.2 }, flexWrap: "wrap", gap: 1 },
+                        h(Typography, { variant: "h6" }, "检索返回结果"),
+                        busy
+                          ? h(
+                              Stack,
+                              { direction: "row", spacing: 1, alignItems: "center" },
+                              h(CircularProgress, { size: 18 }),
+                              h(Typography, { variant: "body2" }, "检索中...")
+                            )
+                          : h(Chip, { label: "待命", color: "success", variant: "outlined" })
+                      ),
+                      error
+                        ? h(Alert, { severity: "error", sx: { mb: 1.5 } }, error)
+                        : h(Alert, { severity: "success", sx: { mb: 1.5 } }, "可在此查看 /retrieve 的 routed_domains 与 context 明细。"),
+                      h(
+                        Paper,
+                        { variant: "outlined", sx: { p: 1.5, maxHeight: 680, overflow: "auto", bgcolor: "#f8fbfd", borderRadius: 3 } },
+                        h("pre", { className: "json-block" }, pretty(result))
+                      )
+                    )
+                  ),
+            )
+          );
+        }
+
+        try {
+          ReactDOM.createRoot(root).render(
+            h(
+              ThemeProvider,
+              { theme: theme },
+              h(ErrorBoundary, null, h(App))
+            )
+          );
+        } catch (bootError) {
+          showBootError(bootError.message || String(bootError));
+        }
+      })();
+    </script>
+  </body>
+</html>

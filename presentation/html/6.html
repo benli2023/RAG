@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>检索心脏：高性能本地向量引擎 (BGE-M3)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700;900&family=Source+Code+Pro:wght@400;600;700&family=Roboto+Flex:wght@300;400;500&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet"/>
+<style type="text/tailwindcss">
+@layer utilities {
+.ppt-slide {
+@apply relative w-[1280px] min-h-[720px] mx-auto box-border
+}
+}
+</style>
+<style>body {
+    font-family: "Noto Sans SC", sans-serif;
+    background: #F4F1E9
+    }
+.title-font {
+    font-family: "Noto Sans SC", sans-serif
+    }
+.code-font {
+    font-family: "Source Code Pro", monospace
+    }
+.body-font {
+    font-family: "Roboto Flex", sans-serif
+    }</style>
+<style>.material-icons {
+    width: 1em
+    }</style><style>.material-icons {
+    direction: rtl
+    }</style></head>
+<body>
+<div class="ppt-slide" style="background: #F4F1E9">
+<div class="h-[85px] flex items-center px-16" style="background: #DC143C; flex-shrink: 0">
+<i class="material-icons text-white mr-3" style="font-size: 36px">storage</i>
+<h1 class="title-font text-white font-bold" style="font-size: 40px">检索心脏：高性能本地向量引擎 (BGE-M3)</h1>
+</div>
+
+<div class="px-16 py-8 min-h-[635px] flex flex-col">
+<div class="flex gap-6 mb-6">
+<div class="w-1/2 bg-white rounded-xl p-6 shadow-lg">
+<div class="flex items-center gap-4 mb-5">
+<div class="w-16 h-16 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, #DC143C 0%, #8B0000 100%)">
+<i class="material-icons text-white" style="font-size: 36px">memory</i>
+</div>
+<div>
+<h3 class="title-font font-bold mb-1" style="font-size: 26px;
+color: #DC143C">BAAI/bge-m3</h3>
+<p class="code-font text-sm" style="color: #718096">Multi-Linguality • Multi-Granularity</p>
+</div>
+</div>
+<div class="grid grid-cols-3 gap-3 mb-4">
+<div class="bg-blue-50 rounded-lg p-3 text-center">
+<div class="title-font font-bold mb-1" style="font-size: 28px;
+color: #DC143C">8192</div>
+<div class="body-font text-sm" style="color: #2d3748">最大输入长度</div>
+</div>
+<div class="bg-green-50 rounded-lg p-3 text-center">
+<div class="title-font font-bold mb-1" style="font-size: 28px;
+color: #DC143C">100+</div>
+<div class="body-font text-sm" style="color: #2d3748">支持语言</div>
+</div>
+<div class="bg-purple-50 rounded-lg p-3 text-center">
+<div class="title-font font-bold mb-1" style="font-size: 28px;
+color: #DC143C">3种</div>
+<div class="body-font text-sm" style="color: #2d3748">检索模式</div>
+</div>
+</div>
+<div class="flex flex-wrap gap-2">
+<div class="bg-red-50 rounded-lg px-3 py-2 border border-red-200">
+<span class="body-font font-semibold" style="font-size: 14px;
+color: #DC143C">Dense Retrieval</span>
+</div>
+<div class="bg-red-50 rounded-lg px-3 py-2 border border-red-200">
+<span class="body-font font-semibold" style="font-size: 14px;
+color: #DC143C">Sparse Retrieval</span>
+</div>
+<div class="bg-red-50 rounded-lg px-3 py-2 border border-red-200">
+<span class="body-font font-semibold" style="font-size: 14px;
+color: #DC143C">Multi-Vector Retrieval</span>
+</div>
+</div>
+</div>
+
+<div class="w-1/2 bg-white rounded-xl p-6 shadow-lg">
+<div class="flex items-center gap-4 mb-5">
+<div class="w-16 h-16 rounded-xl flex items-center justify-center" style="background: linear-gradient(135deg, #FF6B6B 0%, #DC143C 100%)">
+<i class="material-icons text-white" style="font-size: 36px">database</i>
+</div>
+<div>
+<h3 class="title-font font-bold mb-1" style="font-size: 26px;
+color: #DC143C">ChromaDB</h3>
+<p class="code-font text-sm" style="color: #718096">Vector Database • Open Source</p>
+</div>
+</div>
+<div class="grid grid-cols-2 gap-3">
+<div class="bg-gray-50 rounded-lg p-3 border border-gray-200">
+<div class="flex items-center gap-2 mb-2">
+<i class="material-icons" style="font-size: 20px;
+color: #DC143C">speed</i>
+<span class="title-font font-semibold" style="font-size: 16px;
+color: #DC143C">极速检索</span>
+</div>
+<p class="body-font text-sm" style="color: #2d3748">高性能向量搜索引擎</p>
+</div>
+<div class="bg-gray-50 rounded-lg p-3 border border-gray-200">
+<div class="flex items-center gap-2 mb-2">
+<i class="material-icons" style="font-size: 20px;
+color: #DC143C">cloud_off</i>
+<span class="title-font font-semibold" style="font-size: 16px;
+color: #DC143C">本地部署</span>
+</div>
+<p class="body-font text-sm" style="color: #2d3748">数据完全留在内网</p>
+</div>
+<div class="bg-gray-50 rounded-lg p-3 border border-gray-200">
+<div class="flex items-center gap-2 mb-2">
+<i class="material-icons" style="font-size: 20px;
+color: #DC143C">extension</i>
+<span class="title-font font-semibold" style="font-size: 16px;
+color: #DC143C">灵活扩展</span>
+</div>
+<p class="body-font text-sm" style="color: #2d3748">支持多种元数据过滤</p>
+</div>
+<div class="bg-gray-50 rounded-lg p-3 border border-gray-200">
+<div class="flex items-center gap-2 mb-2">
+<i class="material-icons" style="font-size: 20px;
+color: #DC143C">integration_instructions</i>
+<span class="title-font font-semibold" style="font-size: 16px;
+color: #DC143C">易于集成</span>
+</div>
+<p class="body-font text-sm" style="color: #2d3748">Python API 简洁友好</p>
+</div>
+</div>
+</div>
+</div>
+
+<div class="grid grid-cols-3 gap-5 flex-grow">
+<div class="bg-white rounded-xl p-5 shadow-lg border-l-4" style="border-color: #DC143C">
+<div class="flex items-center gap-3 mb-3">
+<div class="w-12 h-12 rounded-full flex items-center justify-center" style="background: #DC143C">
+<i class="material-icons text-white" style="font-size: 28px">shield</i>
+</div>
+<h3 class="title-font font-bold" style="font-size: 22px;
+color: #DC143C">🛡️ 100% 断网可用</h3>
+</div>
+<div class="space-y-2">
+<div class="flex items-start gap-2">
+<i class="material-icons mt-1" style="font-size: 18px;
+color: #FF6B6B">check_circle</i>
+<p class="body-font" style="font-size: 16px;
+color: #2d3748;
+line-height: 1.5">数据不流出内网</p>
+</div>
+<div class="flex items-start gap-2">
+<i class="material-icons mt-1" style="font-size: 18px;
+color: #FF6B6B">check_circle</i>
+<p class="body-font" style="font-size: 16px;
+color: #2d3748;
+line-height: 1.5">完全离线运行</p>
+</div>
+<div class="flex items-start gap-2">
+<i class="material-icons mt-1" style="font-size: 18px;
+color: #FF6B6B">check_circle</i>
+<p class="body-font" style="font-size: 16px;
+color: #2d3748;
+line-height: 1.5">符合企业安全规范</p>
+</div>
+</div>
+</div>
+
+<div class="bg-white rounded-xl p-5 shadow-lg border-l-4" style="border-color: #FF6B6B">
+<div class="flex items-center gap-3 mb-3">
+<div class="w-12 h-12 rounded-full flex items-center justify-center" style="background: #FF6B6B">
+<i class="material-icons text-white" style="font-size: 28px">rocket_launch</i>
+</div>
+<h3 class="title-font font-bold" style="font-size: 22px;
+color: #DC143C">🚀 多语言极强</h3>
+</div>
+<div class="space-y-2">
+<div class="flex items-start gap-2">
+<i class="material-icons mt-1" style="font-size: 18px;
+color: #FF6B6B">check_circle</i>
+<p class="body-font" style="font-size: 16px;
+color: #2d3748;
+line-height: 1.5">中英夹杂 + 代码特化</p>
+</div>
+<div class="flex items-start gap-2">
+<i class="material-icons mt-1" style="font-size: 18px;
+color: #FF6B6B">check_circle</i>
+<p class="body-font" style="font-size: 16px;
+color: #2d3748;
+line-height: 1.5">支持8192长度输入</p>
+</div>
+<div class="flex items-start gap-2">
+<i class="material-icons mt-1" style="font-size: 18px;
+color: #FF6B6B">check_circle</i>
+<p class="body-font" style="font-size: 16px;
+color: #2d3748;
+line-height: 1.5">多粒度检索优化</p>
+</div>
+</div>
+</div>
+
+<div class="bg-white rounded-xl p-5 shadow-lg border-l-4" style="border-color: #DC143C">
+<div class="flex items-center gap-3 mb-3">
+<div class="w-12 h-12 rounded-full flex items-center justify-center" style="background: #DC143C">
+<i class="material-icons text-white" style="font-size: 28px">computer</i>
+</div>
+<h3 class="title-font font-bold" style="font-size: 22px;
+color: #DC143C">💻 轻量级部署</h3>
+</div>
+<div class="space-y-2">
+<div class="flex items-start gap-2">
+<i class="material-icons mt-1" style="font-size: 18px;
+color: #FF6B6B">check_circle</i>
+<p class="body-font" style="font-size: 16px;
+color: #2d3748;
+line-height: 1.5">普通CPU即可极速运行</p>
+</div>
+<div class="flex items-start gap-2">
+<i class="material-icons mt-1" style="font-size: 18px;
+color: #FF6B6B">check_circle</i>
+<p class="body-font" style="font-size: 16px;
+color: #2d3748;
+line-height: 1.5">三种检索模式支持</p>
+</div>
+<div class="flex items-start gap-2">
+<i class="material-icons mt-1" style="font-size: 18px;
+color: #FF6B6B">check_circle</i>
+<p class="body-font" style="font-size: 16px;
+color: #2d3748;
+line-height: 1.5">低成本硬件要求</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</body>
+</html>

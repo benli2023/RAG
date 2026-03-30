@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>传统RAG的痛点</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700;900&family=Source+Code+Pro:wght@400;600;700&family=Roboto+Flex:wght@300;400;500&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet"/>
+<style type="text/tailwindcss">
+@layer utilities {
+.ppt-slide {
+@apply relative w-[1280px] min-h-[720px] mx-auto box-border
+}
+}
+</style>
+<style>body {
+    font-family: "Noto Sans SC", sans-serif;
+    background: #F4F1E9
+    }
+.title-font {
+    font-family: "Noto Sans SC", sans-serif
+    }
+.code-font {
+    font-family: "Source Code Pro", monospace
+    }
+.body-font {
+    font-family: "Roboto Flex", sans-serif
+    }</style>
+<style>.material-icons {
+    width: 1em
+    }</style><style>.material-icons {
+    direction: rtl
+    }</style></head>
+<body>
+<div class="ppt-slide" style="background: #F4F1E9">
+<div class="h-[85px] flex items-center px-16" style="background: #DC143C; flex-shrink: 0">
+<i class="material-icons text-white mr-3" style="font-size: 36px">error_outline</i>
+<h1 class="title-font text-white font-bold" style="font-size: 40px">传统 RAG 的痛点</h1>
+<span class="body-font text-white/90 ml-4" style="font-size: 24px">为什么过去总是失败？</span>
+</div>
+
+<div class="flex min-h-[635px]">
+<div class="w-1/2 flex items-center justify-center p-12">
+<div class="relative">
+<img alt="Messy Documents" class="w-full h-[480px] object-cover rounded-2xl shadow-2xl" src="https://sfile.chatglm.cn/image/39/391cf3aa.jpg"/>
+<div class="absolute top-6 right-6 bg-red-600 rounded-full w-16 h-16 flex items-center justify-center shadow-lg">
+<i class="material-icons text-white" style="font-size: 32px">close</i>
+</div>
+</div>
+</div>
+
+<div class="w-1/2 flex flex-col justify-center pr-16 pl-8">
+<div class="mb-10">
+<div class="flex items-start gap-4 mb-8">
+<div class="bg-red-100 rounded-full p-3 mt-1 shadow-sm">
+<i class="material-icons" style="font-size: 32px;
+color: #DC143C">delete_sweep</i>
+</div>
+<div class="flex-1">
+<h3 class="title-font font-bold mb-2" style="font-size: 28px;
+color: #DC143C">大杂烩文档（Garbage In）</h3>
+<p class="body-font" style="font-size: 20px;
+color: #2d3748;
+line-height: 1.6">架构说明、API 字典、操作步骤混在一起，切片后语义支离破碎</p>
+</div>
+</div>
+
+<div class="flex items-start gap-4 mb-8">
+<div class="bg-red-100 rounded-full p-3 mt-1 shadow-sm">
+<i class="material-icons" style="font-size: 32px;
+color: #DC143C">psychology_alt</i>
+</div>
+<div class="flex-1">
+<h3 class="title-font font-bold mb-2" style="font-size: 28px;
+color: #DC143C">跨模块幻觉（Cross-module Hallucination）</h3>
+<p class="body-font" style="font-size: 20px;
+color: #2d3748;
+line-height: 1.6">向量检索无法区分相似概念，AI 容易精神分裂</p>
+</div>
+</div>
+
+<div class="flex items-start gap-4">
+<div class="bg-red-100 rounded-full p-3 mt-1 shadow-sm">
+<i class="material-icons" style="font-size: 32px;
+color: #DC143C">warning</i>
+</div>
+<div class="flex-1">
+<h3 class="title-font font-bold mb-2" style="font-size: 28px;
+color: #DC143C">数据越权风险（Security Risk）</h3>
+<p class="body-font" style="font-size: 20px;
+color: #2d3748;
+line-height: 1.6">人员可能随便获取未授权内容</p>
+</div>
+</div>
+</div>
+
+<div class="bg-white rounded-xl p-6 border-l-4 shadow-lg" style="border-color: #DC143C">
+<div class="flex items-center gap-3 mb-3">
+<i class="material-icons" style="font-size: 24px;
+color: #DC143C">code</i>
+<span class="code-font font-semibold" style="font-size: 18px;
+color: #2d3748">错误代码示例</span>
+</div>
+<code class="code-font block bg-gray-50 rounded-lg p-3" style="font-size: 16px;
+color: #2d3748">
+order.status = <span style="color: #DC143C">"paid"</span>;<br/>
+payment.status = <span style="color: #DC143C">"completed"</span>;<br/>
+<span class="code-font font-bold" style="color: #DC143C">// ❌ 混淆了订单与支付状态</span>
+</code>
+</div>
+</div>
+</div>
+</div>
+</body>
+</html>

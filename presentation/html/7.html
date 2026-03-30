@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>开发者体验与最终业务价值 (ROI)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700;900&family=Source+Code+Pro:wght@400;600;700&family=Roboto+Flex:wght@300;400;500&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet"/>
+<style type="text/tailwindcss">
+@layer utilities {
+.ppt-slide {
+@apply relative w-[1280px] min-h-[720px] mx-auto box-border
+}
+}
+</style>
+<style>body {
+    font-family: "Noto Sans SC", sans-serif;
+    background: #F4F1E9
+    }
+.title-font {
+    font-family: "Noto Sans SC", sans-serif
+    }
+.code-font {
+    font-family: "Source Code Pro", monospace
+    }
+.body-font {
+    font-family: "Roboto Flex", sans-serif
+    }</style>
+<style>.material-icons {
+    width: 1em
+    }</style><style>.material-icons {
+    direction: rtl
+    }</style></head>
+<body>
+<div class="ppt-slide" style="background: #F4F1E9">
+<div class="h-[85px] flex items-center px-16" style="background: #DC143C; flex-shrink: 0">
+<i class="material-icons text-white mr-3" style="font-size: 36px">insights</i>
+<h1 class="title-font text-white font-bold" style="font-size: 40px">开发者体验与最终业务价值 (ROI)</h1>
+</div>
+
+<div class="px-16 py-6 min-h-[635px] flex gap-6">
+<div class="w-1/2 flex flex-col">
+<div class="bg-white rounded-xl shadow-lg min-h-[560px] overflow-hidden flex flex-col">
+<div class="bg-gray-900 px-4 py-3 flex items-center gap-2">
+<div class="flex gap-2">
+<div class="w-3 h-3 rounded-full bg-red-500"></div>
+<div class="w-3 h-3 rounded-full bg-yellow-500"></div>
+<div class="w-3 h-3 rounded-full bg-green-500"></div>
+</div>
+<span class="code-font text-sm text-gray-300 ml-4">@mycorp - VS Code Extension</span>
+</div>
+
+<div class="flex-grow p-5 overflow-y-auto bg-gray-50">
+<div class="mb-4">
+<div class="flex items-start gap-3 mb-3">
+<div class="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0" style="background: #DC143C">
+<i class="material-icons text-white" style="font-size: 18px">person</i>
+</div>
+<div class="flex-grow">
+<div class="bg-white rounded-lg p-3 shadow-sm">
+<p class="code-font" style="font-size: 14px;
+color: #2d3748">@mycorp 前端调登录接口报错 401 怎么办？</p>
+</div>
+</div>
+</div>
+
+<div class="flex items-start gap-3 mb-3">
+<div class="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0" style="background: #FF6B6B">
+<i class="material-icons text-white" style="font-size: 18px">smart_toy</i>
+</div>
+<div class="flex-grow space-y-2">
+<div class="bg-red-50 rounded-lg p-3 shadow-sm border-l-4" style="border-color: #DC143C">
+<div class="flex items-center gap-2 mb-2">
+<i class="material-icons" style="font-size: 18px;
+color: #DC143C">psychology</i>
+<span class="code-font font-semibold" style="font-size: 14px;
+color: #DC143C">🧠 分析业务模块...</span>
+</div>
+<p class="body-font text-sm" style="color: #2d3748">识别关键词：登录、接口、401错误</p>
+</div>
+
+<div class="bg-red-50 rounded-lg p-3 shadow-sm border-l-4" style="border-color: #FF6B6B">
+<div class="flex items-center gap-2 mb-2">
+<i class="material-icons" style="font-size: 18px;
+color: #FF6B6B">track_changes</i>
+<span class="code-font font-semibold" style="font-size: 14px;
+color: #DC143C">🎯 锁定: user-center</span>
+</div>
+<p class="body-font text-sm" style="color: #2d3748">权限校验通过 · 检索相关知识库</p>
+</div>
+
+<div class="bg-red-50 rounded-lg p-3 shadow-sm border-l-4" style="border-color: #FF6B6B">
+<div class="flex items-center gap-2 mb-2">
+<i class="material-icons" style="font-size: 18px;
+color: #FF6B6B">auto_awesome</i>
+<span class="code-font font-semibold" style="font-size: 14px;
+color: #DC143C">✨ 生成回答...</span>
+</div>
+<div class="bg-blue-50 rounded p-2">
+<p class="body-font text-sm mb-2" style="color: #2d3748">根据 <span class="code-font font-semibold" style="color: #DC143C">user-center</span> 文档：</p>
+<p class="body-font text-sm" style="color: #2d3748">1. 检查请求头中的 Authorization token 格式<br/>2. 验证 token 是否已过期<br/>3. 确认用户权限是否充足</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+
+<div class="w-1/2 space-y-4">
+<div class="bg-white rounded-xl p-5 shadow-lg border-l-4" style="border-color: #DC143C">
+<div class="flex items-center gap-3 mb-4">
+<div class="w-12 h-12 rounded-full flex items-center justify-center" style="background: #DC143C">
+<i class="material-icons text-white" style="font-size: 28px">verified</i>
+</div>
+<h3 class="title-font font-bold" style="font-size: 22px;
+color: #DC143C">极高准确率</h3>
+</div>
+<div class="space-y-2">
+<div class="flex items-start gap-2">
+<i class="material-icons mt-1" style="font-size: 20px;
+color: #FF6B6B">check_circle</i>
+<p class="body-font" style="font-size: 16px;
+color: #2d3748;
+line-height: 1.6"><span class="font-semibold">Diátaxis + 意图路由</span>，告别 AI 瞎编</p>
+</div>
+<div class="flex items-start gap-2">
+<i class="material-icons mt-1" style="font-size: 20px;
+color: #FF6B6B">check_circle</i>
+<p class="body-font" style="font-size: 16px;
+color: #2d3748;
+line-height: 1.6">精准定位业务模块，检索结果相关性提升 <span class="title-font font-bold" style="color: #DC143C">85%</span></p>
+</div>
+</div>
+</div>
+
+<div class="bg-white rounded-xl p-5 shadow-lg border-l-4" style="border-color: #FF6B6B">
+<div class="flex items-center gap-3 mb-4">
+<div class="w-12 h-12 rounded-full flex items-center justify-center" style="background: #FF6B6B">
+<i class="material-icons text-white" style="font-size: 28px">savings</i>
+</div>
+<h3 class="title-font font-bold" style="font-size: 22px;
+color: #DC143C">极低成本</h3>
+</div>
+<div class="space-y-2">
+<div class="flex items-start gap-2">
+<i class="material-icons mt-1" style="font-size: 20px;
+color: #FF6B6B">check_circle</i>
+<p class="body-font" style="font-size: 16px;
+color: #2d3748;
+line-height: 1.6"><span class="font-semibold">白嫖 Copilot 云端算力</span>，后端仅需低配机器跑 Chroma</p>
+</div>
+<div class="flex items-start gap-2">
+<i class="material-icons mt-1" style="font-size: 20px;
+color: #FF6B6B">check_circle</i>
+<p class="body-font" style="font-size: 16px;
+color: #2d3748;
+line-height: 1.6">硬件成本降低 <span class="title-font font-bold" style="color: #DC143C">70%</span>，运维成本降低 <span class="title-font font-bold" style="color: #DC143C">60%</span></p>
+</div>
+</div>
+</div>
+
+<div class="bg-white rounded-xl p-5 shadow-lg border-l-4" style="border-color: #DC143C">
+<div class="flex items-center gap-3 mb-4">
+<div class="w-12 h-12 rounded-full flex items-center justify-center" style="background: #DC143C">
+<i class="material-icons text-white" style="font-size: 28px">security</i>
+</div>
+<h3 class="title-font font-bold" style="font-size: 22px;
+color: #DC143C">绝对安全</h3>
+</div>
+<div class="space-y-2">
+<div class="flex items-start gap-2">
+<i class="material-icons mt-1" style="font-size: 20px;
+color: #FF6B6B">check_circle</i>
+<p class="body-font" style="font-size: 16px;
+color: #2d3748;
+line-height: 1.6"><span class="font-semibold">行级 RBAC 交集控制</span>，硬代码物理隔离</p>
+</div>
+<div class="flex items-start gap-2">
+<i class="material-icons mt-1" style="font-size: 20px;
+color: #FF6B6B">check_circle</i>
+<p class="body-font" style="font-size: 16px;
+color: #2d3748;
+line-height: 1.6">零数据泄露风险，符合企业安全合规要求</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</body>
+</html>

@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Agentic RAG系统架构全景图</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700;900&family=Source+Code+Pro:wght@400;600;700&family=Roboto+Flex:wght@300;400;500&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet"/>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<style type="text/tailwindcss">
+@layer utilities {
+.ppt-slide {
+@apply relative w-[1280px] min-h-[720px] mx-auto box-border
+}
+}
+</style>
+<style>body {
+    font-family: "Noto Sans SC", sans-serif;
+    background: #F4F1E9
+    }
+.title-font {
+    font-family: "Noto Sans SC", sans-serif
+    }
+.code-font {
+    font-family: "Source Code Pro", monospace
+    }
+.body-font {
+    font-family: "Roboto Flex", sans-serif
+    }
+.mermaid {
+    background: white;
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1)
+    }</style>
+<style>.material-icons {
+    width: 1em
+    }</style><style>.material-icons {
+    direction: rtl
+    }</style></head>
+<body>
+<div class="ppt-slide" style="background: #F4F1E9">
+<div class="h-[85px] flex items-center px-16" style="background: #DC143C; flex-shrink: 0">
+<i class="material-icons text-white mr-3" style="font-size: 36px">account_tree</i>
+<h1 class="title-font text-white font-bold" style="font-size: 40px">全新系统交互全景图：Agentic RAG</h1>
+</div>
+
+<div class="px-16 py-8">
+<div class="flex gap-8 min-h-[550px]">
+<div class="w-3/4 flex flex-col justify-center">
+<div class="mermaid">
+graph LR
+    User[开发者 VS Code]
+    CopilotPlugin[Copilot 插件前端 @mycorp Bot]
+    RouterLLM[云端 LLM 意图路由]
+    FastAPI[内网网关 FastAPI 后端]
+    Chroma[(本地 ChromaDB 向量库 + BGE-M3)]
+    GenLLM[云端 LLM 内容生成]
+    
+    User -->|提问| CopilotPlugin
+    CopilotPlugin -->|隐式分析| RouterLLM
+    RouterLLM -->|返回目标模块| CopilotPlugin
+    CopilotPlugin -->|Query + 模块 + 身份| FastAPI
+    FastAPI -->|权限校验 + 硬过滤| Chroma
+    Chroma -->|精准上下文| FastAPI
+    FastAPI -->|返回 Context| CopilotPlugin
+    CopilotPlugin -->|Context + Query| GenLLM
+    GenLLM -->|流式输出代码| CopilotPlugin
+    CopilotPlugin -->|展示结果| User
+    
+    classDef client fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#1a237e
+    classDef llm fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20
+    classDef server fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#e65100
+    classDef db fill:#fce4ec,stroke:#c2185b,stroke-width:2px,color:#880e4f
+    
+    class User,CopilotPlugin client
+    class RouterLLM,GenLLM llm
+    class FastAPI server
+    class Chroma db
+</div>
+</div>
+
+<div class="w-1/4 flex flex-col gap-5">
+<div class="bg-white rounded-xl p-5 shadow-lg border-l-4" style="border-color: #DC143C">
+<div class="flex items-center gap-3 mb-3">
+<i class="material-icons" style="font-size: 32px;
+color: #DC143C">stars</i>
+<h3 class="title-font font-bold" style="font-size: 22px;
+color: #DC143C">核心亮点</h3>
+</div>
+</div>
+
+<div class="bg-white rounded-xl p-5 shadow-lg">
+<div class="flex items-start gap-3">
+<i class="material-icons" style="font-size: 28px;
+color: #DC143C">psychology</i>
+<div>
+<h4 class="title-font font-bold mb-2" style="font-size: 20px;
+color: #DC143C">意图路由</h4>
+<p class="body-font" style="font-size: 16px;
+color: #2d3748;
+line-height: 1.5">智能分析用户查询意图，精准定位业务模块</p>
+</div>
+</div>
+</div>
+
+<div class="bg-white rounded-xl p-5 shadow-lg">
+<div class="flex items-start gap-3">
+<i class="material-icons" style="font-size: 28px;
+color: #DC143C">security</i>
+<div>
+<h4 class="title-font font-bold mb-2" style="font-size: 20px;
+color: #DC143C">物理隔离</h4>
+<p class="body-font" style="font-size: 16px;
+color: #2d3748;
+line-height: 1.5">敏感数据保留内网，云端仅处理通用推理</p>
+</div>
+</div>
+</div>
+
+<div class="bg-white rounded-xl p-5 shadow-lg">
+<div class="flex items-start gap-3">
+<i class="material-icons" style="font-size: 28px;
+color: #DC143C">savings</i>
+<div>
+<h4 class="title-font font-bold mb-2" style="font-size: 20px;
+color: #DC143C">白嫖云端算力</h4>
+<p class="body-font" style="font-size: 16px;
+color: #2d3748;
+line-height: 1.5">利用 Copilot 云端资源，降低本地部署成本</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+
+<script>
+mermaid.initialize({
+    startOnLoad: true,
+    theme: 'default',
+    flowchart: {
+        useMaxWidth: true,
+        htmlLabels: true,
+        curve: 'basis'
+    }
+});
+</script>
+</body>
+</html>

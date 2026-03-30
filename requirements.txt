@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+python-frontmatter
+langchain-core
+langchain-text-splitters
+langchain-chroma
+langchain-community
+sentence-transformers
