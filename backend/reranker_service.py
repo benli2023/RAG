@@ -66,20 +66,29 @@ def _attach_retrieval_metadata(documents: Iterable[Document]) -> list[Document]:
     return enriched_documents
 
 
+def predict_relevance_scores(query: str, texts: list[str]) -> list[float]:
+    if not texts:
+        return []
+
+    reranker = get_reranker()
+    if reranker is None:
+        return []
+
+    pairs = [(query, text) for text in texts]
+    try:
+        return [_coerce_score(score) for score in reranker.predict(pairs)]
+    except Exception as exc:
+        print(f"[reranker] predict failed, skip scoring: {exc}")
+        return []
+
+
 def rerank_documents(query: str, documents: list[Document]) -> list[Document]:
     if not documents:
         return []
 
     enriched_documents = _attach_retrieval_metadata(documents)
-    reranker = get_reranker()
-    if reranker is None:
-        return enriched_documents
-
-    pairs = [(query, doc.page_content) for doc in enriched_documents]
-    try:
-        scores = reranker.predict(pairs)
-    except Exception as exc:
-        print(f"[reranker] predict failed, use vector ranking only: {exc}")
+    scores = predict_relevance_scores(query, [doc.page_content for doc in enriched_documents])
+    if not scores:
         return enriched_documents
 
     reranked_documents: list[Document] = []

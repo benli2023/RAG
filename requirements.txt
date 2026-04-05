@@ -6,3 +6,4 @@ langchain-text-splitters
 langchain-chroma
 langchain-community
 sentence-transformers
+elasticsearch

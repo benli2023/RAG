@@ -100,22 +100,40 @@ LOCAL_MODEL_PATH = PROJECT_ROOT / "my_local_bge_m3"
 DB_DIR = "./chroma_multimodule_db"
 # 本地 Reranker 模型目录
 LOCAL_RERANKER_PATH = PROJECT_ROOT / "my_local_bge_reranker"
+# Elasticsearch 连接地址
+ES_URL = os.getenv("ES_URL", "http://localhost:9200")
+# Elasticsearch 倒排索引名称
+ES_INDEX_NAME = os.getenv("ES_INDEX_NAME", "rag_docs_bm25")
 
 # ==================== 检索配置 ====================
 
 # 初始召回的候选文档数量
 RETRIEVAL_K = 12
 # 最终传入大模型的上下文片段数量
-FINAL_CONTEXT_K = 4
+FINAL_CONTEXT_K = max(1, _get_int_config("FINAL_CONTEXT_K", 3))
+# 向量召回数量
+VECTOR_RECALL_K = max(RETRIEVAL_K, _get_int_config("VECTOR_RECALL_K", 20))
+# BM25 召回数量
+BM25_RECALL_K = max(RETRIEVAL_K, _get_int_config("BM25_RECALL_K", 20))
+# RRF 融合后进入精排的候选数量
+FUSION_TOP_K = max(FINAL_CONTEXT_K, _get_int_config("FUSION_TOP_K", 10))
+# RRF 公式平滑参数
+RRF_K = max(1, _get_int_config("RRF_K", 60))
+# 是否启用上下文压缩
+CONTEXT_COMPRESSION_ENABLED = _get_bool_config("CONTEXT_COMPRESSION_ENABLED", True)
+# 每个文档压缩后保留的句子数量
+CONTEXT_COMPRESSION_SENTENCE_K = max(1, _get_int_config("CONTEXT_COMPRESSION_SENTENCE_K", 3))
+# 是否启用 Elasticsearch BM25 召回
+ES_ENABLED = _get_bool_config("ES_ENABLED", True)
 # 是否启用 BGE Reranker 精排
 # 可直接修改这里；如需按环境覆盖，可设置 RERANKER_ENABLED=true/false
 RERANKER_ENABLED = _get_bool_config("RERANKER_ENABLED", True)
 # Reranker 粗排召回数量，默认放大到 15 以提升精排效果
 # 未启用 Reranker 时回退到 RETRIEVAL_K，避免无意义放大召回
 RERANK_CANDIDATE_K = (
-	max(RETRIEVAL_K, _get_int_config("RERANK_CANDIDATE_K", 15))
+	max(FUSION_TOP_K, _get_int_config("RERANK_CANDIDATE_K", FUSION_TOP_K))
 	if RERANKER_ENABLED
-	else RETRIEVAL_K
+	else FUSION_TOP_K
 )
 # Reranker 模型标识；本地目录存在时优先加载本地模型
 RERANKER_MODEL_NAME = os.getenv(
@@ -158,9 +176,18 @@ def get_runtime_config() -> dict[str, object]:
 			"db_dir": DB_DIR,
 			"embedding_model_path": str(LOCAL_MODEL_PATH),
 			"reranker_model_path": str(LOCAL_RERANKER_PATH),
+			"es_enabled": ES_ENABLED,
+			"es_url": ES_URL,
+			"es_index_name": ES_INDEX_NAME,
 		},
 		"retrieval": {
 			"retrieval_k": RETRIEVAL_K,
+			"vector_recall_k": VECTOR_RECALL_K,
+			"bm25_recall_k": BM25_RECALL_K,
+			"fusion_top_k": FUSION_TOP_K,
+			"rrf_k": RRF_K,
+			"context_compression_enabled": CONTEXT_COMPRESSION_ENABLED,
+			"context_compression_sentence_k": CONTEXT_COMPRESSION_SENTENCE_K,
 			"final_context_k": FINAL_CONTEXT_K,
 			"reranker_enabled": RERANKER_ENABLED,
 			"rerank_candidate_k": RERANK_CANDIDATE_K,
@@ -179,8 +206,18 @@ def get_runtime_config() -> dict[str, object]:
 			"dashboard_index_exists": DASHBOARD_INDEX.is_file(),
 		},
 		"config_sources": {
+			"es_enabled": _get_config_source("ES_ENABLED"),
+			"es_url": _get_config_source("ES_URL"),
+			"es_index_name": _get_config_source("ES_INDEX_NAME"),
 			"enable_acl": _get_config_source("ENABLE_ACL"),
 			"enable_sub_chunking": _get_config_source("ENABLE_SUB_CHUNKING"),
+			"final_context_k": _get_config_source("FINAL_CONTEXT_K"),
+			"vector_recall_k": _get_config_source("VECTOR_RECALL_K"),
+			"bm25_recall_k": _get_config_source("BM25_RECALL_K"),
+			"fusion_top_k": _get_config_source("FUSION_TOP_K"),
+			"rrf_k": _get_config_source("RRF_K"),
+			"context_compression_enabled": _get_config_source("CONTEXT_COMPRESSION_ENABLED"),
+			"context_compression_sentence_k": _get_config_source("CONTEXT_COMPRESSION_SENTENCE_K"),
 			"reranker_enabled": _get_config_source("RERANKER_ENABLED"),
 			"rerank_candidate_k": _get_config_source("RERANK_CANDIDATE_K"),
 			"reranker_model_name": _get_config_source("RERANKER_MODEL_NAME"),

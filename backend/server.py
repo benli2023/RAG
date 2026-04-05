@@ -6,14 +6,13 @@ import frontmatter
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from access_control import ANONYMOUS_USERNAME, build_source_file_filter, dedupe_values, normalize_username, resolve_accessible_sources
+from access_control import ANONYMOUS_USERNAME
 from api_models import QueryRequest, SourceFileRequest
 from documents_service import assert_document_access, get_module_directory_response, list_docs_markdown_files, normalize_docs_relative_path, split_single_markdown_file
-from faq_support import rank_results_for_generation
-from rag_config import DASHBOARD_DIR, DASHBOARD_INDEX, DOCS_DIR, ENABLE_ACL, ENABLE_SUB_CHUNKING, FINAL_CONTEXT_K, RERANK_CANDIDATE_K, RERANKER_ENABLED, USERNAME_GROUP_MAPPING_FILE, get_runtime_config
+from es_service import clear_es_index, delete_by_source_file_in_es, upsert_chunks_to_es
+from rag_config import DASHBOARD_DIR, DASHBOARD_INDEX, DOCS_DIR, ENABLE_ACL, ENABLE_SUB_CHUNKING, get_runtime_config
 from rag_store import embedding_function, vectorstore
-from reranker_service import rerank_documents
-from retrieval_response_formatter import build_context_entry, build_retrieval_response
+from retrieval_pipeline_service import run_retrieval_pipeline
 from vectorstore_service import clear_vectorstore, delete_by_source_file, get_chunk_statistics, get_grouped_source_files_from_vectorstore, upsert_chunks
 
 app = FastAPI()
@@ -60,27 +59,41 @@ def ingest_docs():
     if not final_chunks:
         return {"message": f"未找到可入库的 Markdown 内容，共扫描 {len(md_files)} 个文件。"}
     upsert_result = upsert_chunks(final_chunks, embedding_function, vectorstore)
+    es_upsert_result = upsert_chunks_to_es(final_chunks)
     return {
-        "message": f"成功处理 {len(md_files)} 个文件，生成 {len(final_chunks)} 个带域标签的 Chunk！",
+        "message": f"成功处理 {len(md_files)} 个文件，生成 {len(final_chunks)} 个带域标签的 Chunk，并已同步检索索引。",
         "sub_chunking_enabled": ENABLE_SUB_CHUNKING,
         "embed_seconds": upsert_result["embed_seconds"],
         "add_documents_seconds": upsert_result["add_documents_seconds"],
+        "es_enabled": es_upsert_result["enabled"],
+        "es_index_name": es_upsert_result["index_name"],
+        "es_indexed_count": es_upsert_result["indexed_count"],
+        "es_sync_seconds": es_upsert_result["sync_seconds"],
     }
 
 
 @app.post("/clear")
 def clear_index():
-    deleted_count = clear_vectorstore(vectorstore)
-    return {"message": f"已清空向量库，共删除 {deleted_count} 条记录。", "deleted_count": deleted_count}
+    deleted_vector_count = clear_vectorstore(vectorstore)
+    deleted_es_count = clear_es_index()
+    return {
+        "message": f"已清空检索索引，向量库删除 {deleted_vector_count} 条，BM25 索引删除 {deleted_es_count} 条。",
+        "deleted_count": deleted_vector_count,
+        "deleted_vector_count": deleted_vector_count,
+        "deleted_es_count": deleted_es_count,
+    }
 
 
 @app.post("/rebuild")
 def rebuild_index():
-    deleted_count = clear_vectorstore(vectorstore)
+    deleted_vector_count = clear_vectorstore(vectorstore)
+    deleted_es_count = clear_es_index()
     ingest_result = ingest_docs()
     return {
         "message": "索引已重建完成。",
-        "deleted_count": deleted_count,
+        "deleted_count": deleted_vector_count,
+        "deleted_vector_count": deleted_vector_count,
+        "deleted_es_count": deleted_es_count,
         "ingest_result": ingest_result,
     }
 
@@ -159,11 +172,14 @@ def list_grouped_documents_from_vectorstore():
 
 @app.post("/docs/delete")
 def delete_document_chunks(req: SourceFileRequest):
-    deleted_count = delete_by_source_file(req.source_file, vectorstore)
+    deleted_vector_count = delete_by_source_file(req.source_file, vectorstore)
+    deleted_es_count = delete_by_source_file_in_es(req.source_file)
     return {
         "message": f"已删除 source_file={req.source_file} 的向量记录。",
         "source_file": req.source_file,
-        "deleted_count": deleted_count,
+        "deleted_count": deleted_vector_count,
+        "deleted_vector_count": deleted_vector_count,
+        "deleted_es_count": deleted_es_count,
     }
 
 
@@ -172,122 +188,35 @@ def update_document_chunks(req: SourceFileRequest):
     docs_dir = Path(__file__).resolve().parent.parent / "docs"
     file_path = normalize_docs_relative_path(req.source_file)
 
-    deleted_count = delete_by_source_file(req.source_file, vectorstore)
+    deleted_vector_count = delete_by_source_file(req.source_file, vectorstore)
+    deleted_es_count = delete_by_source_file_in_es(req.source_file)
     chunks = split_single_markdown_file(file_path, docs_dir)
     upsert_result = upsert_chunks(chunks, embedding_function, vectorstore)
+    es_upsert_result = upsert_chunks_to_es(chunks)
 
     return {
         "message": f"已完成 source_file={req.source_file} 的重建更新。",
         "source_file": req.source_file,
-        "deleted_count": deleted_count,
+        "deleted_count": deleted_vector_count,
+        "deleted_vector_count": deleted_vector_count,
+        "deleted_es_count": deleted_es_count,
         "upserted_count": upsert_result["chunk_count"],
         "embed_seconds": upsert_result["embed_seconds"],
         "add_documents_seconds": upsert_result["add_documents_seconds"],
+        "es_enabled": es_upsert_result["enabled"],
+        "es_index_name": es_upsert_result["index_name"],
+        "es_indexed_count": es_upsert_result["indexed_count"],
+        "es_sync_seconds": es_upsert_result["sync_seconds"],
     }
 
 @app.post("/retrieve")
 def retrieve_context(req: QueryRequest):
-    query = req.query
-    username = normalize_username(req.username)
-    requested_domains = dedupe_values(req.domains)
-    authorized_source_files, restricted_source_files, authorized_domains = resolve_accessible_sources(
-        username,
-        requested_domains,
-        DOCS_DIR,
-        USERNAME_GROUP_MAPPING_FILE,
+    pipeline_result = run_retrieval_pipeline(
+        query=req.query,
+        username=req.username,
+        domains=req.domains,
     )
-    has_candidate_documents = bool(authorized_source_files or restricted_source_files)
-    filter_value = None
-
-    if ENABLE_ACL and restricted_source_files and not authorized_source_files:
-        denied_domains = sorted({Path(source_file).parts[0] for source_file in restricted_source_files if Path(source_file).parts})
-        print(f"⛔ ACL deny user={username}, denied_files={restricted_source_files}, requested_domains={requested_domains or '[global]'}")
-        return {
-            "status": "forbidden",
-            "message": f"用户 {username} 无权访问当前命中的知识文档。",
-            "username": username,
-            "denied_domains": denied_domains,
-            "denied_source_files": restricted_source_files,
-        }
-    
-    # 根据前端传入的 domains 和文档 ACL 生成 source_file 硬过滤
-    if authorized_source_files:
-        filter_value = build_source_file_filter(authorized_source_files)
-        if requested_domains:
-            if ENABLE_ACL:
-                print(f"🎯 接收到前端的大模型路由，锁定模块: {requested_domains}，ACL 收敛后文档数={len(authorized_source_files)}，user={username}")
-            else:
-                print(f"🎯 接收到前端的大模型路由，锁定模块: {requested_domains}，可检索文档数={len(authorized_source_files)}，user={username}")
-        else:
-            if ENABLE_ACL:
-                print(f"🔐 全局检索已按文档 ACL 收敛，允许文档数={len(authorized_source_files)}，user={username}")
-            else:
-                print(f"🌐 全局检索启用，当前可检索文档数={len(authorized_source_files)}，user={username}")
-    elif requested_domains:
-        print(f"🎯 接收到前端的大模型路由，但模块 {requested_domains} 下没有可检索文档，user={username}")
-    else:
-        print("🌐 接收到空路由，执行全局检索")
-
-    if requested_domains and not has_candidate_documents:
-        return {
-            "context": [],
-            "routed_domains": requested_domains,
-            "authorized_domains": [],
-            "authorized_source_files": [],
-            "username": username,
-        }
-
-    if ENABLE_ACL and requested_domains and not authorized_source_files and restricted_source_files:
-        denied_domains = sorted({Path(source_file).parts[0] for source_file in restricted_source_files if Path(source_file).parts})
-        return {
-            "status": "forbidden",
-            "message": f"用户 {username} 无权访问当前命中的知识文档。",
-            "username": username,
-            "denied_domains": denied_domains,
-            "denied_source_files": restricted_source_files,
-        }
-
-    if ENABLE_ACL and not requested_domains and not authorized_source_files and restricted_source_files:
-        print(f"⛔ ACL deny user={username}, no accessible documents for global retrieval")
-        if filter_value is None:
-            return {
-                "status": "forbidden",
-                "message": f"用户 {username} 当前没有任何可检索的知识文档权限。",
-                "username": username,
-                "denied_domains": sorted({Path(source_file).parts[0] for source_file in restricted_source_files if Path(source_file).parts}),
-                "denied_source_files": restricted_source_files,
-            }
-
-    # 第一阶段：放大召回，给第二阶段 Reranker 留出候选空间
-    print(
-        f"INFO: 执行 BGE-M3 向量检索，candidate_k={RERANK_CANDIDATE_K}, "
-        f"reranker_enabled={RERANKER_ENABLED}, filter={filter_value}"
-    )
-    if filter_value is not None:
-        results = vectorstore.similarity_search(query, k=RERANK_CANDIDATE_K, filter=filter_value)
-    else:
-        results = vectorstore.similarity_search(query, k=RERANK_CANDIDATE_K)
-
-    # 第二阶段：使用 CrossEncoder/BGE-Reranker 精排
-    results = rerank_documents(query, results)
-    results = rank_results_for_generation(query, results)
-    
-    # 拼装带有严密上下文的 Prompt
-    context = []
-    for res in results:
-        # stop once we've collected the final number of context pieces
-        if len(context) >= FINAL_CONTEXT_K:
-            break
-
-        context.append(build_context_entry(len(context), res.metadata, res.page_content))
-
-    return build_retrieval_response(
-        context=context,
-        requested_domains=requested_domains,
-        authorized_domains=authorized_domains,
-        authorized_source_files=authorized_source_files,
-        username=username,
-    )
+    return pipeline_result["response"]
 
 if __name__ == "__main__":
     import uvicorn
