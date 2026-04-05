@@ -27,6 +27,10 @@ _INDEX_BODY = {
             "domain": {"type": "keyword"},
             "type": {"type": "keyword"},
             "content": {"type": "text"},
+            "header_text": {"type": "text"},
+            "description": {"type": "text"},
+            "keywords_text": {"type": "text"},
+            "parent_title": {"type": "text"},
             "chunk_index": {"type": "integer"},
             "is_faq": {"type": "boolean"},
             "faq": {"type": "boolean"},
@@ -34,6 +38,25 @@ _INDEX_BODY = {
         },
     }
 }
+
+
+def _coerce_text(value: Any) -> str:
+    return str(value).strip() if value not in (None, "") else ""
+
+
+def _coerce_keywords_text(value: Any) -> str:
+    if isinstance(value, list):
+        return " ".join(str(item).strip() for item in value if str(item).strip())
+    return _coerce_text(value)
+
+
+def _build_header_text(metadata: dict[str, Any]) -> str:
+    header_values = [
+        str(metadata.get(header_key, "")).strip()
+        for header_key in ("Header 1", "Header 2", "Header 3")
+        if str(metadata.get(header_key, "")).strip()
+    ]
+    return " > ".join(header_values)
 
 
 def _mark_unavailable(reason: str) -> None:
@@ -93,16 +116,16 @@ def get_es_client():
         _raise_unavailable()
 
 
-def ensure_index(client=None) -> bool:
+def ensure_index(client=None, index_name: str = ES_INDEX_NAME) -> bool:
     if not ES_ENABLED:
         return False
 
     resolved_client = client or get_es_client()
 
-    if resolved_client.indices.exists(index=ES_INDEX_NAME):
+    if resolved_client.indices.exists(index=index_name):
         return True
 
-    resolved_client.indices.create(index=ES_INDEX_NAME, body=_INDEX_BODY)
+    resolved_client.indices.create(index=index_name, body=_INDEX_BODY)
     return True
 
 
@@ -114,15 +137,19 @@ def _build_es_source(doc: Document) -> tuple[str, dict[str, Any]]:
         **metadata,
         "chunk_id": chunk_id,
         "content": doc.page_content,
+        "header_text": _build_header_text(metadata),
+        "description": _coerce_text(metadata.get("description")),
+        "keywords_text": _coerce_keywords_text(metadata.get("keywords")),
+        "parent_title": _coerce_text(metadata.get("parent_title")),
     }
     return chunk_id, source
 
 
-def upsert_chunks_to_es(chunks: list[Document]) -> dict[str, Any]:
+def upsert_chunks_to_es(chunks: list[Document], index_name: str = ES_INDEX_NAME) -> dict[str, Any]:
     if not chunks:
         return {
             "enabled": ES_ENABLED,
-            "index_name": ES_INDEX_NAME,
+            "index_name": index_name,
             "indexed_count": 0,
             "sync_seconds": 0,
         }
@@ -131,14 +158,14 @@ def upsert_chunks_to_es(chunks: list[Document]) -> dict[str, Any]:
         _warn_disabled("BM25 upsert")
         return {
             "enabled": False,
-            "index_name": ES_INDEX_NAME,
+            "index_name": index_name,
             "indexed_count": 0,
             "sync_seconds": 0,
         }
 
     client = get_es_client()
 
-    ensure_index(client)
+    ensure_index(client, index_name=index_name)
     operations: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
     duplicate_count = 0
@@ -149,7 +176,7 @@ def upsert_chunks_to_es(chunks: list[Document]) -> dict[str, Any]:
             continue
 
         seen_ids.add(chunk_id)
-        operations.append({"index": {"_index": ES_INDEX_NAME, "_id": chunk_id}})
+        operations.append({"index": {"_index": index_name, "_id": chunk_id}})
         operations.append(source)
 
     if duplicate_count:
@@ -166,13 +193,13 @@ def upsert_chunks_to_es(chunks: list[Document]) -> dict[str, Any]:
 
     return {
         "enabled": True,
-        "index_name": ES_INDEX_NAME,
+        "index_name": index_name,
         "indexed_count": max(len(seen_ids) - error_count, 0),
         "sync_seconds": round(sync_elapsed, 2),
     }
 
 
-def delete_by_source_file_in_es(source_file: str) -> int:
+def delete_by_source_file_in_es(source_file: str, index_name: str = ES_INDEX_NAME) -> int:
     cleaned = source_file.strip().lstrip("/\\")
     if not cleaned:
         raise ValueError("source_file is empty")
@@ -182,11 +209,11 @@ def delete_by_source_file_in_es(source_file: str) -> int:
         return 0
 
     client = get_es_client()
-    if not client.indices.exists(index=ES_INDEX_NAME):
+    if not client.indices.exists(index=index_name):
         return 0
 
     response = client.delete_by_query(
-        index=ES_INDEX_NAME,
+        index=index_name,
         query={"term": {"source_file": cleaned}},
         conflicts="proceed",
         refresh=True,
@@ -194,17 +221,17 @@ def delete_by_source_file_in_es(source_file: str) -> int:
     return int(response.get("deleted", 0))
 
 
-def clear_es_index() -> int:
+def clear_es_index(index_name: str = ES_INDEX_NAME) -> int:
     if not ES_ENABLED:
         _warn_disabled("BM25 clear")
         return 0
 
     client = get_es_client()
-    if not client.indices.exists(index=ES_INDEX_NAME):
+    if not client.indices.exists(index=index_name):
         return 0
 
     response = client.delete_by_query(
-        index=ES_INDEX_NAME,
+        index=index_name,
         query={"match_all": {}},
         conflicts="proceed",
         refresh=True,
@@ -212,7 +239,13 @@ def clear_es_index() -> int:
     return int(response.get("deleted", 0))
 
 
-def search_bm25_documents(query: str, source_files: list[str] | None, limit: int) -> list[Document]:
+def search_bm25_documents(
+    query: str,
+    source_files: list[str] | None,
+    limit: int,
+    domains: list[str] | None = None,
+    index_name: str = ES_INDEX_NAME,
+) -> list[Document]:
     if limit <= 0:
         return []
 
@@ -225,12 +258,29 @@ def search_bm25_documents(query: str, source_files: list[str] | None, limit: int
     filters: list[dict[str, Any]] = []
     if source_files:
         filters.append({"terms": {"source_file": source_files}})
+    if domains:
+        filters.append({"terms": {"domain": domains}})
 
     response = client.search(
-        index=ES_INDEX_NAME,
+        index=index_name,
         query={
             "bool": {
-                "must": [{"match": {"content": {"query": query}}}],
+                "must": [
+                    {
+                        "multi_match": {
+                            "query": query,
+                            "type": "most_fields",
+                            "fields": [
+                                "content",
+                                "header_text^3",
+                                "faq_question^3",
+                                "description^2",
+                                "keywords_text^2",
+                                "parent_title^2",
+                            ],
+                        }
+                    }
+                ],
                 "filter": filters,
             }
         },

@@ -2,6 +2,25 @@
 domain: order-center
 type: how-to
 version: v1.0
+description: 指导后端如何实现订单落库，包括重新计算金额、事务插入和发送延迟 MQ。
+keywords:
+  - 订单中心
+  - 下单
+  - 创单
+  - t_order
+  - order_status
+  - INIT
+  - PAID
+  - CANCELED
+  - 雪花 ID
+  - RocketMQ
+  - 超时取消
+  - 库存释放
+  - 订单落库
+  - 金额计算
+  - 事务
+  - 延迟 MQ
+  - 创单实施
 acl:
   allow:
     - "$authenticated"

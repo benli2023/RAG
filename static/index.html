@@ -520,7 +520,6 @@
           const [expandedModules, setExpandedModules] = React.useState({});
           const [docKeyword, setDocKeyword] = React.useState("");
           const [retrieveQuery, setRetrieveQuery] = React.useState("");
-          const [retrieveDomains, setRetrieveDomains] = React.useState([]);
           const [busy, setBusy] = React.useState(false);
           const [configBusy, setConfigBusy] = React.useState(false);
           const [runtimeConfig, setRuntimeConfig] = React.useState(null);
@@ -595,7 +594,7 @@
             });
           }
 
-          function runRetrieve(query, domains) {
+          function runRetrieve(query) {
             const cleanedQuery = String(query || "").trim();
             if (!cleanedQuery) {
               setError("请输入检索问题（query）。");
@@ -609,23 +608,20 @@
                 path: "/retrieve",
                 body: {
                   query: cleanedQuery,
-                  domains: Array.isArray(domains) ? domains : [],
                 },
               });
             });
           }
 
           function runRetrieveWithCurrentInput() {
-            return runRetrieve(retrieveQuery, retrieveDomains);
+            return runRetrieve(retrieveQuery);
           }
 
           function runRetrieveCase(item) {
             const body = (item && item.body) || {};
             const query = body.query || "";
-            const domains = Array.isArray(body.domains) ? body.domains : [];
             setRetrieveQuery(query);
-            setRetrieveDomains(domains);
-            return runRetrieve(query, domains);
+            return runRetrieve(query);
           }
 
           function getSelectedSourceFile() {
@@ -1367,20 +1363,6 @@
                             },
                             placeholder: "例如：订单处于什么状态的时候，才允许被取消？",
                           }),
-                          h(Autocomplete, {
-                            multiple: true,
-                            options: availableDomains,
-                            value: retrieveDomains,
-                            onChange: function (_event, value) {
-                              setRetrieveDomains(value || []);
-                            },
-                            renderInput: function (params) {
-                              return h(TextField, Object.assign({}, params, {
-                                label: "限定模块（domains）",
-                                placeholder: "留空表示全局检索",
-                              }));
-                            },
-                          }),
                           h(
                             Stack,
                             { direction: "row", gap: 1, flexWrap: "wrap" },
@@ -1390,7 +1372,6 @@
                               disabled: busy,
                               onClick: function () {
                                 setRetrieveQuery("");
-                                setRetrieveDomains([]);
                                 setError("");
                                 setResult({ message: "已清空检索请求条件。" });
                               },
@@ -1402,7 +1383,7 @@
                         DashboardSection,
                         null,
                         h(Typography, { variant: "h6", sx: { mb: 1.2 } }, "预置测试用例"),
-                        h(Alert, { severity: "info", sx: { mb: 1.5 } }, "点击任一用例会自动填充 query/domains 并立即调用 /retrieve。"),
+                        h(Alert, { severity: "info", sx: { mb: 1.5 } }, "点击任一用例会自动填充 query，并由第一阶段自动推断 routed_domains。"),
                         h(
                           Paper,
                           { variant: "outlined", sx: { borderRadius: 3, maxHeight: 420, overflow: "auto" } },

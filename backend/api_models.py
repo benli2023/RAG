@@ -1,5 +1,4 @@
-from typing import List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from access_control import ANONYMOUS_USERNAME
 
 
@@ -9,5 +8,4 @@ class SourceFileRequest(BaseModel):
 
 class QueryRequest(BaseModel):
     query: str
-    domains: List[str] = Field(default_factory=list)
     username: str = ANONYMOUS_USERNAME

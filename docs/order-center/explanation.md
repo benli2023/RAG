@@ -2,6 +2,24 @@
 domain: order-center
 type: explanation
 version: v1.0
+description: 解释订单生命周期、乐观锁状态机和待支付订单 15 分钟超时取消机制。
+keywords:
+  - 订单中心
+  - 下单
+  - 创单
+  - t_order
+  - order_status
+  - INIT
+  - PAID
+  - CANCELED
+  - 雪花 ID
+  - RocketMQ
+  - 超时取消
+  - 库存释放
+  - 订单生命周期
+  - 乐观锁
+  - 状态机
+  - 15分钟
 acl:
   allow:
     - "$authenticated"

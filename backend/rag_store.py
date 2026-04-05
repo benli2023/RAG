@@ -10,3 +10,8 @@ embedding_function = HuggingFaceBgeEmbeddings(
 )
 
 vectorstore = Chroma(embedding_function=embedding_function, persist_directory=DB_DIR)
+parent_vectorstore = Chroma(
+    collection_name="parent_documents",
+    embedding_function=embedding_function,
+    persist_directory=DB_DIR,
+)

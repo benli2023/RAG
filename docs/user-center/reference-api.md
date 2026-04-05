@@ -2,6 +2,22 @@
 domain: user-center
 type: reference
 version: v1.0
+description: 用户登录接口的请求参数、返回字段和业务错误码参考。
+keywords:
+  - 用户中心
+  - 登录
+  - Access Token
+  - Refresh Token
+  - 401 Unauthorized
+  - 无感刷新
+  - Authorization Bearer
+  - X-User-Id
+  - /api/v1/user/login
+  - /api/v1/user/refresh
+  - 登录接口
+  - 请求参数
+  - 业务错误码
+  - API 参考
 acl:
   groups:
     - iam-admin

@@ -3,6 +3,25 @@ domain: order-center
 type: faq
 faq: true
 version: v1.0
+description: 回答未支付订单处理、订单号生成方式、允许取消的状态等高频问题。
+keywords:
+  - 订单中心
+  - 下单
+  - 创单
+  - t_order
+  - order_status
+  - INIT
+  - PAID
+  - CANCELED
+  - 雪花 ID
+  - RocketMQ
+  - 超时取消
+  - 库存释放
+  - 未支付订单
+  - 订单号生成
+  - 订单取消
+  - 高频问题
+  - FAQ
 acl:
   allow:
     - "$authenticated"

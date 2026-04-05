@@ -2,6 +2,22 @@
 domain: user-center
 type: explanation
 version: v1.0
+description: 说明双 Token 鉴权架构、Token 生命周期和网关统一鉴权方式。
+keywords:
+  - 用户中心
+  - 登录
+  - Access Token
+  - Refresh Token
+  - 401 Unauthorized
+  - 无感刷新
+  - Authorization Bearer
+  - X-User-Id
+  - /api/v1/user/login
+  - /api/v1/user/refresh
+  - 双 Token
+  - Token 生命周期
+  - 网关鉴权
+  - 鉴权架构
 acl:
   allow:
     - "$authenticated"

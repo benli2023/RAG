@@ -2,6 +2,22 @@
 domain: user-center
 type: how-to
 version: v1.0
+description: 规范前端登录接入流程，包括登录、存储 Token、鉴权请求和过期刷新。
+keywords:
+  - 用户中心
+  - 登录
+  - Access Token
+  - Refresh Token
+  - 401 Unauthorized
+  - 无感刷新
+  - Authorization Bearer
+  - X-User-Id
+  - /api/v1/user/login
+  - /api/v1/user/refresh
+  - 前端登录
+  - Token 存储
+  - 过期刷新
+  - 鉴权请求
 acl:
   allow:
     - "$authenticated"

@@ -95,8 +95,6 @@ def _build_runtime_health() -> dict[str, object]:
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # 文档知识库目录
 DOCS_DIR = PROJECT_ROOT / "docs"
-# 模块目录说明文件，用于模块导航与检索
-MODULE_DIRECTORY_FILE = DOCS_DIR / "module-directory.yaml"
 # 用户与权限组映射配置文件
 USERNAME_GROUP_MAPPING_FILE = Path(__file__).resolve().parent / "username_group_mapping.json"
 
@@ -110,8 +108,10 @@ DB_DIR = "./chroma_multimodule_db"
 LOCAL_RERANKER_PATH = PROJECT_ROOT / "my_local_bge_reranker"
 # Elasticsearch 连接地址
 ES_URL = os.getenv("ES_URL", "http://localhost:9200")
-# Elasticsearch 倒排索引名称
+# Elasticsearch 子切片倒排索引名称
 ES_INDEX_NAME = os.getenv("ES_INDEX_NAME", "rag_docs_bm25")
+# Elasticsearch 父文档倒排索引名称
+ES_PARENT_INDEX_NAME = os.getenv("ES_PARENT_INDEX_NAME", f"{ES_INDEX_NAME}_parent")
 
 # ==================== 检索配置 ====================
 
@@ -127,8 +127,14 @@ BM25_RECALL_K = max(RETRIEVAL_K, _get_int_config("BM25_RECALL_K", 20))
 FUSION_TOP_K = max(FINAL_CONTEXT_K, _get_int_config("FUSION_TOP_K", 10))
 # RRF 公式平滑参数
 RRF_K = max(1, _get_int_config("RRF_K", 60))
+# 是否启用父子双层索引的两阶段检索
+ENABLE_PARENT_CHILD_RETRIEVAL = _get_bool_config("ENABLE_PARENT_CHILD_RETRIEVAL", True)
+# 阶段一父文档召回数量
+PARENT_RECALL_K = max(1, _get_int_config("PARENT_RECALL_K", 5))
 # 是否启用上下文压缩
-CONTEXT_COMPRESSION_ENABLED = _get_bool_config("CONTEXT_COMPRESSION_ENABLED", False)
+CONTEXT_COMPRESSION_ENABLED = _get_bool_config("CONTEXT_COMPRESSION_ENABLED", True)
+# 触发上下文压缩的最小文本长度（字符数）
+CONTEXT_COMPRESSION_MIN_CHARS = max(1, _get_int_config("CONTEXT_COMPRESSION_MIN_CHARS", 1500))
 # 每个文档压缩后保留的句子数量
 CONTEXT_COMPRESSION_SENTENCE_K = max(1, _get_int_config("CONTEXT_COMPRESSION_SENTENCE_K", 3))
 # 是否启用 Elasticsearch BM25 召回
@@ -176,7 +182,6 @@ def get_runtime_config() -> dict[str, object]:
 		"paths": {
 			"project_root": str(PROJECT_ROOT),
 			"docs_dir": str(DOCS_DIR),
-			"module_directory_file": str(MODULE_DIRECTORY_FILE),
 			"username_group_mapping_file": str(USERNAME_GROUP_MAPPING_FILE),
 			"dashboard_dir": str(DASHBOARD_DIR),
 			"dashboard_index": str(DASHBOARD_INDEX),
@@ -189,6 +194,7 @@ def get_runtime_config() -> dict[str, object]:
 			"es_enabled_configured": ES_ENABLED_CONFIGURED,
 			"es_url": ES_URL,
 			"es_index_name": ES_INDEX_NAME,
+			"es_parent_index_name": ES_PARENT_INDEX_NAME,
 		},
 		"retrieval": {
 			"retrieval_k": RETRIEVAL_K,
@@ -196,7 +202,10 @@ def get_runtime_config() -> dict[str, object]:
 			"bm25_recall_k": BM25_RECALL_K,
 			"fusion_top_k": FUSION_TOP_K,
 			"rrf_k": RRF_K,
+			"enable_parent_child_retrieval": ENABLE_PARENT_CHILD_RETRIEVAL,
+			"parent_recall_k": PARENT_RECALL_K,
 			"context_compression_enabled": CONTEXT_COMPRESSION_ENABLED,
+			"context_compression_min_chars": CONTEXT_COMPRESSION_MIN_CHARS,
 			"context_compression_sentence_k": CONTEXT_COMPRESSION_SENTENCE_K,
 			"final_context_k": FINAL_CONTEXT_K,
 			"reranker_enabled": RERANKER_ENABLED,
@@ -219,6 +228,7 @@ def get_runtime_config() -> dict[str, object]:
 			"es_enabled": _get_config_source("ES_ENABLED"),
 			"es_url": _get_config_source("ES_URL"),
 			"es_index_name": _get_config_source("ES_INDEX_NAME"),
+			"es_parent_index_name": _get_config_source("ES_PARENT_INDEX_NAME"),
 			"enable_acl": _get_config_source("ENABLE_ACL"),
 			"enable_sub_chunking": _get_config_source("ENABLE_SUB_CHUNKING"),
 			"final_context_k": _get_config_source("FINAL_CONTEXT_K"),
@@ -226,7 +236,10 @@ def get_runtime_config() -> dict[str, object]:
 			"bm25_recall_k": _get_config_source("BM25_RECALL_K"),
 			"fusion_top_k": _get_config_source("FUSION_TOP_K"),
 			"rrf_k": _get_config_source("RRF_K"),
+			"enable_parent_child_retrieval": _get_config_source("ENABLE_PARENT_CHILD_RETRIEVAL"),
+			"parent_recall_k": _get_config_source("PARENT_RECALL_K"),
 			"context_compression_enabled": _get_config_source("CONTEXT_COMPRESSION_ENABLED"),
+			"context_compression_min_chars": _get_config_source("CONTEXT_COMPRESSION_MIN_CHARS"),
 			"context_compression_sentence_k": _get_config_source("CONTEXT_COMPRESSION_SENTENCE_K"),
 			"reranker_enabled": _get_config_source("RERANKER_ENABLED"),
 			"rerank_candidate_k": _get_config_source("RERANK_CANDIDATE_K"),

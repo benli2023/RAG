@@ -5,8 +5,6 @@ import re
 from pathlib import Path
 from typing import Any, List
 
-import yaml
-
 import frontmatter
 from fastapi import HTTPException
 from langchain_core.documents import Document
@@ -21,62 +19,40 @@ from access_control import (
 )
 from faq_support import (
     extract_faq_question,
+    extract_markdown_title,
     format_faq_chunk_content,
     is_faq_document,
     split_structured_faq_chunks,
 )
-from rag_config import DOCS_DIR, ENABLE_SUB_CHUNKING, MODULE_DIRECTORY_FILE, USERNAME_GROUP_MAPPING_FILE
+from rag_config import DOCS_DIR, ENABLE_SUB_CHUNKING, USERNAME_GROUP_MAPPING_FILE
 from retrieval_response_formatter import extract_context_labels
 
 FENCED_BLOCK_PATTERN = re.compile(r"```[\w-]*\n.*?\n```", re.DOTALL)
+PARENT_FAQ_QUESTION_LIMIT = 8
+
+DOMAIN_ALIAS_MAP: dict[str, list[str]] = {
+    "global": ["global", "全局", "跨模块", "全链路", "调用链路", "链路", "工作流", "workflow"],
+    "order-center": ["order-center", "订单中心", "订单模块", "订单状态", "创单", "下单", "t_order", "INIT", "PAID", "CANCELED"],
+    "payment-gateway": ["payment-gateway", "支付网关", "支付模块", "支付", "预支付", "支付回调", "PaymentSuccessEvent", "统一下单"],
+    "user-center": ["user-center", "用户中心", "鉴权", "登录", "Token", "Access Token", "Refresh Token", "401 Unauthorized"],
+}
+
+PARENT_SALIENT_PATTERNS = [
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in [
+        r"PaymentSuccessEvent",
+        r"INIT|PAID|CANCELED|SUCCESS|SIGN_ERROR",
+        r"/api/v\d+/",
+        r"MQ|RocketMQ|回调|异步|状态|流转|链路|系统|依赖",
+        r"订单中心|支付网关|用户中心|API 网关|库存服务",
+        r"Access Token|Refresh Token|Token|鉴权",
+    ]
+]
 
 
-def list_docs_markdown_files(include_module_directory: bool = False) -> List[Path]:
+def list_docs_markdown_files() -> List[Path]:
     md_files = [Path(file_path) for file_path in glob.glob(f"{DOCS_DIR}/**/*.md", recursive=True)]
-    if not include_module_directory:
-        md_files = [file_path for file_path in md_files if file_path.resolve() != MODULE_DIRECTORY_FILE.resolve()]
     return sorted(md_files)
-
-
-def get_module_directory_response() -> dict[str, Any]:
-    if not MODULE_DIRECTORY_FILE.is_file():
-        raise FileNotFoundError("module directory not found: module-directory.yaml")
-
-    with open(MODULE_DIRECTORY_FILE, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-
-    raw_modules = data.get("modules", []) if isinstance(data, dict) else []
-
-    modules = []
-    for mod in raw_modules:
-        if not isinstance(mod, dict):
-            continue
-        domain = str(mod.get("domain", "")).strip()
-        if not domain:
-            continue
-        files = [
-            {
-                "name": str(file_entry.get("name", "")).strip(),
-                "description": str(file_entry.get("description", "")).strip(),
-                "keywords": [str(kw) for kw in file_entry.get("keywords", []) if kw],
-            }
-            for file_entry in mod.get("files", [])
-            if isinstance(file_entry, dict) and file_entry.get("name")
-        ]
-        modules.append({
-            "domain": domain,
-            "description": str(mod.get("description", "")).strip(),
-            "keywords": [str(kw) for kw in mod.get("keywords", []) if kw],
-            "files": files,
-        })
-
-    domains = sorted(mod["domain"] for mod in modules)
-
-    return {
-        "source_file": str(MODULE_DIRECTORY_FILE.resolve().relative_to(DOCS_DIR.resolve())).replace("\\", "/"),
-        "domains": domains,
-        "modules": modules,
-    }
 
 
 def normalize_docs_relative_path(relative_path: str) -> Path:
@@ -153,6 +129,46 @@ def sanitize_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     return {key: sanitize_metadata_value(value) for key, value in metadata.items()}
 
 
+def _normalize_metadata_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _normalize_metadata_keywords(value: Any) -> list[str]:
+    if isinstance(value, list):
+        raw_keywords = value
+    elif isinstance(value, str):
+        raw_keywords = re.split(r"[,，;；\n]+", value)
+    else:
+        raw_keywords = []
+
+    normalized_keywords: list[str] = []
+    for keyword in raw_keywords:
+        cleaned_keyword = _normalize_metadata_text(keyword)
+        if cleaned_keyword and cleaned_keyword not in normalized_keywords:
+            normalized_keywords.append(cleaned_keyword)
+    return normalized_keywords
+
+
+def _normalize_related_domains(value: Any, current_domain: str) -> list[str]:
+    if isinstance(value, list):
+        raw_domains = value
+    elif isinstance(value, str):
+        raw_domains = re.split(r"[,，;；\n]+", value)
+    else:
+        raw_domains = []
+
+    normalized_domains: list[str] = []
+    for raw_domain in raw_domains:
+        cleaned_domain = _normalize_metadata_text(raw_domain)
+        if cleaned_domain and cleaned_domain not in normalized_domains:
+            normalized_domains.append(cleaned_domain)
+
+    if current_domain and current_domain not in normalized_domains:
+        normalized_domains.insert(0, current_domain)
+
+    return normalized_domains
+
+
 def _protect_fenced_blocks(text: str) -> tuple[str, dict[str, str]]:
     placeholders: dict[str, str] = {}
 
@@ -170,12 +186,7 @@ def _restore_fenced_blocks(text: str, placeholders: dict[str, str]) -> str:
     return text
 
 
-def split_single_markdown_file(file_path: Path, docs_dir: Path) -> List[Document]:
-    markdown_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=[
-        ("#", "Header 1"), ("##", "Header 2"), ("###", "Header 3")
-    ])
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=50)
-
+def _load_markdown_payload(file_path: Path, docs_dir: Path) -> tuple[str, dict[str, Any], str]:
     with open(file_path, "r", encoding="utf-8") as f:
         post = frontmatter.load(f)
 
@@ -183,13 +194,87 @@ def split_single_markdown_file(file_path: Path, docs_dir: Path) -> List[Document
     yaml_metadata = dict(post.metadata) if isinstance(post.metadata, dict) else {}
 
     if "domain" not in yaml_metadata:
-        parts = str(file_path).replace("\\", "/").split("/")
-        yaml_metadata["domain"] = parts[-2] if len(parts) >= 2 else "global"
+        relative_parts = file_path.resolve().relative_to(docs_dir.resolve()).parts
+        yaml_metadata["domain"] = relative_parts[0] if len(relative_parts) > 1 else "global"
+
+    current_domain = _normalize_metadata_text(yaml_metadata.get("domain") or "global") or "global"
+    yaml_metadata["domain"] = current_domain
+    yaml_metadata["description"] = _normalize_metadata_text(yaml_metadata.get("description"))
+    yaml_metadata["keywords"] = _normalize_metadata_keywords(yaml_metadata.get("keywords"))
+    yaml_metadata["related_domains"] = _normalize_related_domains(yaml_metadata.get("related_domains"), current_domain)
 
     source_file = str(file_path.resolve().relative_to(docs_dir.resolve())).replace("\\", "/")
+    return text_content, yaml_metadata, source_file
+
+
+def _extract_related_domains(text_content: str, yaml_metadata: dict[str, Any], source_file: str) -> list[str]:
+    current_domain = str(yaml_metadata.get("domain", "global")).strip()
+    doc_type = str(yaml_metadata.get("type", "document")).strip().lower()
+    explicit_related_domains = _normalize_related_domains(yaml_metadata.get("related_domains"), current_domain)
+    if explicit_related_domains:
+        return explicit_related_domains
+
+    if doc_type == "catalog":
+        return [current_domain] if current_domain else []
+
+    normalized_text = f"{source_file}\n{text_content}".lower()
+    domain_scores: dict[str, int] = {}
+    for domain_name, aliases in DOMAIN_ALIAS_MAP.items():
+        score = 0
+        for alias in aliases:
+            alias_text = alias.lower()
+            if alias_text and alias_text in normalized_text:
+                score += normalized_text.count(alias_text)
+        if score > 0:
+            domain_scores[domain_name] = score
+
+    if current_domain:
+        domain_scores[current_domain] = max(domain_scores.get(current_domain, 0), 1)
+
+    ranked_domains = [
+        domain_name
+        for domain_name, _ in sorted(domain_scores.items(), key=lambda item: (item[1], item[0] == current_domain), reverse=True)
+    ]
+
+    if current_domain and current_domain in ranked_domains:
+        ranked_domains.remove(current_domain)
+        ranked_domains.insert(0, current_domain)
+
+    if current_domain == "global":
+        return ranked_domains[:3]
+    return ranked_domains[:2]
+
+
+def _build_parent_document(text_content: str, yaml_metadata: dict[str, Any], source_file: str) -> Document | None:
+    title = str(yaml_metadata.get("title") or extract_markdown_title(text_content) or Path(source_file).stem).strip()
+    description = _normalize_metadata_text(yaml_metadata.get("description"))
+    if not description:
+        return None
+
+    related_domains = _extract_related_domains(text_content, yaml_metadata, source_file)
+    parent_metadata = yaml_metadata.copy()
+    parent_metadata["source_file"] = source_file
+    parent_metadata["chunk_index"] = 0
+    if description:
+        parent_metadata["parent_description"] = description
+    if related_domains:
+        parent_metadata["related_domains"] = related_domains
+    if title:
+        parent_metadata["parent_title"] = title
+
+    return Document(page_content=description, metadata=parent_metadata)
+
+
+def _build_child_documents(text_content: str, yaml_metadata: dict[str, Any], source_file: str) -> List[Document]:
+    markdown_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=[
+        ("#", "Header 1"), ("##", "Header 2"), ("###", "Header 3")
+    ])
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=50)
     if is_faq_document(yaml_metadata):
         structured_faq_chunks = split_structured_faq_chunks(text_content, yaml_metadata, source_file)
         if structured_faq_chunks:
+            for doc in structured_faq_chunks:
+                doc.metadata["parent_source_file"] = source_file
             return structured_faq_chunks
 
     md_chunks = markdown_splitter.split_text(text_content)
@@ -199,6 +284,7 @@ def split_single_markdown_file(file_path: Path, docs_dir: Path) -> List[Document
     for chunk in md_chunks:
         chunk.metadata.update(yaml_metadata)
         chunk.metadata["source_file"] = source_file
+        chunk.metadata["parent_source_file"] = source_file
 
         if is_faq_document(chunk.metadata):
             faq_question = extract_faq_question(chunk.metadata)
@@ -234,3 +320,15 @@ def split_single_markdown_file(file_path: Path, docs_dir: Path) -> List[Document
             next_chunk_index += 1
 
     return final_chunks
+
+
+def build_index_documents(file_path: Path, docs_dir: Path) -> tuple[Document | None, List[Document]]:
+    text_content, yaml_metadata, source_file = _load_markdown_payload(file_path, docs_dir)
+    parent_document = _build_parent_document(text_content, yaml_metadata, source_file)
+    child_documents = _build_child_documents(text_content, yaml_metadata, source_file)
+    return parent_document, child_documents
+
+
+def split_single_markdown_file(file_path: Path, docs_dir: Path) -> List[Document]:
+    _, child_documents = build_index_documents(file_path, docs_dir)
+    return child_documents

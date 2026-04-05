@@ -40,14 +40,18 @@ def build_context_entry(index: int, metadata: dict[str, Any], page_content: str)
 
 def build_retrieval_response(
     context: list[dict[str, Any]],
-    requested_domains: list[str],
+    routed_domains: list[str],
+    expanded_routed_domains: list[str],
+    routed_source_files: list[str],
     authorized_domains: list[str],
     authorized_source_files: list[str],
     username: str,
 ) -> dict[str, Any]:
     return {
         "context": context,
-        "routed_domains": requested_domains,
+        "routed_domains": routed_domains,
+        "expanded_routed_domains": expanded_routed_domains,
+        "routed_source_files": routed_source_files,
         "authorized_domains": authorized_domains,
         "authorized_source_files": authorized_source_files,
         "username": username,

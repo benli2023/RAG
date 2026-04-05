@@ -2,6 +2,25 @@
 domain: global
 type: how-to
 version: v1.0
+description: 电商完整下单链路说明，串联用户中心、订单中心、支付网关和消息回调闭环。
+related_domains:
+  - global
+  - user-center
+  - order-center
+  - payment-gateway
+keywords:
+  - 跨模块流程
+  - 下单链路
+  - API Gateway
+  - Token 校验
+  - 支付回调
+  - PaymentSuccessEvent
+  - Agentic RAG
+  - Mermaid 架构图
+  - 订单创建
+  - 支付网关
+  - 消息回调
+  - 闭环流程
 acl:
   allow:
     - "*"

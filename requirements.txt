@@ -7,4 +7,3 @@ langchain-chroma
 langchain-community
 sentence-transformers
 elasticsearch
-deepeval

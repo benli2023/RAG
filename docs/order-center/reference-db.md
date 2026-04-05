@@ -2,6 +2,23 @@
 domain: order-center
 type: reference
 version: v1.0
+description: 订单主表 t_order 字段说明与 order_status 状态枚举字典。
+keywords:
+  - 订单中心
+  - 下单
+  - 创单
+  - t_order
+  - order_status
+  - INIT
+  - PAID
+  - CANCELED
+  - 雪花 ID
+  - RocketMQ
+  - 超时取消
+  - 库存释放
+  - 数据库字段
+  - 状态枚举
+  - 字段说明
 acl:
   groups:
     - order-admin

@@ -2,6 +2,24 @@
 domain: global
 type: how-to
 version: v1.0
+description: RAG 系统演示稿，介绍企业私有 RAG 的痛点、架构、时序图、知识治理方式和 ROI。
+related_domains:
+    - global
+keywords:
+    - 跨模块流程
+    - 下单链路
+    - API Gateway
+    - Token 校验
+    - 支付回调
+    - PaymentSuccessEvent
+    - Agentic RAG
+    - Mermaid 架构图
+    - RAG 演示
+    - 企业私有 RAG
+    - 系统架构图
+    - 时序图
+    - 知识治理
+    - ROI
 acl:
     allow:
         - "*"

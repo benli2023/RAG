@@ -2,6 +2,22 @@
 domain: payment-gateway
 type: faq
 version: v1.0
+description: 支付常见问题排查手册，覆盖支付成功未回调、签名错误和退款串行控制。
+keywords:
+  - 支付网关
+  - 统一下单
+  - SIGN_ERROR
+  - MD5 签名
+  - notify_status
+  - SUCCESS
+  - 微信回调
+  - 退款
+  - Redis 分布式锁
+  - 支付未回调
+  - 签名错误
+  - 串行控制
+  - 故障排查
+  - FAQ
 acl:
   allow:
     - "$authenticated"

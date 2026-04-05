@@ -5,7 +5,7 @@ import re
 from langchain_core.documents import Document
 
 from faq_support import is_faq_document
-from rag_config import CONTEXT_COMPRESSION_ENABLED, CONTEXT_COMPRESSION_SENTENCE_K
+from rag_config import CONTEXT_COMPRESSION_ENABLED, CONTEXT_COMPRESSION_MIN_CHARS, CONTEXT_COMPRESSION_SENTENCE_K
 from reranker_service import predict_relevance_scores
 
 
@@ -30,15 +30,25 @@ def _split_structured_lines(text: str) -> list[str]:
     return []
 
 
+def _normalize_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def compress_context(query: str, documents: list[Document], sentence_limit: int | None = None) -> list[Document]:
     if not documents or not CONTEXT_COMPRESSION_ENABLED:
         return documents
 
     resolved_sentence_limit = max(1, sentence_limit or CONTEXT_COMPRESSION_SENTENCE_K)
+    resolved_min_chars = max(1, CONTEXT_COMPRESSION_MIN_CHARS)
     compressed_documents: list[Document] = []
 
     for doc in documents:
         if is_faq_document(doc.metadata):
+            compressed_documents.append(doc)
+            continue
+
+        normalized_content = _normalize_text(doc.page_content)
+        if len(normalized_content) < resolved_min_chars:
             compressed_documents.append(doc)
             continue
 

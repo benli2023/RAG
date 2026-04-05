@@ -31,9 +31,8 @@ class EvaluationCase:
     name: str
     query: str
     username: str = "anonymous"
-    domains: list[str] = field(default_factory=list)
     expected_status: str = "success"
-    expected_authorized_domains: list[str] = field(default_factory=list)
+    expected_routed_domains: list[str] = field(default_factory=list)
     expected_keywords: list[str] = field(default_factory=list)
     require_non_empty_context: bool = True
     require_bm25_hits: bool = False
@@ -46,8 +45,7 @@ def _build_default_cases() -> list[EvaluationCase]:
         EvaluationCase(
             name="user-login-reference",
             query="前端调登录接口的时候，需要传哪些参数？如果密码输错了会返回什么错误码？",
-            domains=["user-center"],
-            expected_authorized_domains=["user-center"],
+            expected_routed_domains=["user-center"],
             expected_keywords=["手机号", "密码", "10003"],
             require_bm25_hits=True,
             min_shared_fused_hits=1,
@@ -55,8 +53,7 @@ def _build_default_cases() -> list[EvaluationCase]:
         EvaluationCase(
             name="token-design-rationale",
             query="为什么我们系统要搞 Access Token 和 Refresh Token 两个 Token？只用一个不行吗？",
-            domains=["user-center"],
-            expected_authorized_domains=["user-center"],
+            expected_routed_domains=["user-center"],
             expected_keywords=["Access Token", "Refresh Token", "2 小时", "30 天"],
             require_bm25_hits=True,
             min_shared_fused_hits=1,
@@ -64,8 +61,7 @@ def _build_default_cases() -> list[EvaluationCase]:
         EvaluationCase(
             name="order-cancel-status",
             query="订单处于什么状态的时候，才允许被取消？",
-            domains=["order-center"],
-            expected_authorized_domains=["order-center"],
+            expected_routed_domains=["order-center"],
             expected_keywords=["INIT", "CANCELED"],
             require_bm25_hits=True,
             min_shared_fused_hits=1,
@@ -73,8 +69,7 @@ def _build_default_cases() -> list[EvaluationCase]:
         EvaluationCase(
             name="order-timeout-flow",
             query="如果用户下单了但一直不付款，这笔订单会怎么处理？会不会一直占着库存？",
-            domains=["order-center"],
-            expected_authorized_domains=["order-center"],
+            expected_routed_domains=["order-center"],
             expected_keywords=["15", "RocketMQ", "库存"],
             require_bm25_hits=True,
             min_shared_fused_hits=1,
@@ -82,8 +77,7 @@ def _build_default_cases() -> list[EvaluationCase]:
         EvaluationCase(
             name="cross-module-payment",
             query="当用户在 App 里面点击提交订单后，到最终支付成功，这中间的系统调用链路是怎样的？状态是怎么变的？",
-            domains=["global", "order-center", "payment-gateway"],
-            expected_authorized_domains=["global", "order-center", "payment-gateway"],
+            expected_routed_domains=["global", "order-center", "payment-gateway"],
             expected_keywords=["INIT", "PAID", "支付"],
             require_bm25_hits=True,
             min_shared_fused_hits=1,
@@ -97,13 +91,6 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--query", help="Run a single ad-hoc query instead of the built-in evaluation suite.")
     parser.add_argument("--username", default="anonymous", help="Username used for ACL-aware retrieval.")
-    parser.add_argument(
-        "--domain",
-        dest="domains",
-        action="append",
-        default=[],
-        help="Optional routed domain. Repeat the flag to pass multiple domains.",
-    )
     parser.add_argument("--case-file", help="Path to a JSON file containing evaluation cases.")
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON output.")
     parser.add_argument(
@@ -114,7 +101,7 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _load_cases(case_file: str | None, query: str | None, username: str, domains: list[str]) -> list[EvaluationCase]:
+def _load_cases(case_file: str | None, query: str | None, username: str) -> list[EvaluationCase]:
     if case_file:
         raw_cases = json.loads(Path(case_file).read_text(encoding="utf-8"))
         if not isinstance(raw_cases, list):
@@ -125,9 +112,8 @@ def _load_cases(case_file: str | None, query: str | None, username: str, domains
                 name=str(item.get("name") or f"case-{index + 1}"),
                 query=str(item["query"]),
                 username=str(item.get("username", username)),
-                domains=list(item.get("domains", [])),
                 expected_status=str(item.get("expected_status", "success")),
-                expected_authorized_domains=list(item.get("expected_authorized_domains", [])),
+                expected_routed_domains=list(item.get("expected_routed_domains", item.get("expected_authorized_domains", []))),
                 expected_keywords=list(item.get("expected_keywords", [])),
                 require_non_empty_context=bool(item.get("require_non_empty_context", True)),
                 require_bm25_hits=bool(item.get("require_bm25_hits", False)),
@@ -143,7 +129,6 @@ def _load_cases(case_file: str | None, query: str | None, username: str, domains
                 name="ad-hoc",
                 query=query,
                 username=username,
-                domains=domains,
                 require_bm25_hits=True,
             )
         ]
@@ -215,7 +200,6 @@ def _evaluate_case(case: EvaluationCase) -> dict[str, Any]:
     pipeline_result = run_retrieval_pipeline(
         query=case.query,
         username=case.username,
-        domains=case.domains,
     )
     response = pipeline_result["response"]
     trace = pipeline_result["trace"]
@@ -226,10 +210,11 @@ def _evaluate_case(case: EvaluationCase) -> dict[str, Any]:
     )
     matched_keywords = [keyword for keyword in case.expected_keywords if keyword.lower() in context_text.lower()]
     observed_final_domains = sorted({str(doc.metadata.get("domain", "unknown")) for doc in trace["final_results"]})
+    routed_domains = response.get("routed_domains", [])
 
     checks = {
         "status": status == case.expected_status,
-        "authorized_domains": set(case.expected_authorized_domains).issubset(set(response.get("authorized_domains", []))),
+        "routed_domains": set(case.expected_routed_domains).issubset(set(routed_domains)),
         "context_non_empty": (len(context_entries) > 0) if case.require_non_empty_context else True,
         "bm25_hits": trace["metrics"]["bm25_hit_count"] > 0 if case.require_bm25_hits else True,
         "shared_fusion": trace["metrics"]["shared_fused_hit_count"] >= case.min_shared_fused_hits,
@@ -242,18 +227,19 @@ def _evaluate_case(case: EvaluationCase) -> dict[str, Any]:
         "name": case.name,
         "query": case.query,
         "username": case.username,
-        "domains": case.domains,
         "status": status,
         "passed": passed,
         "checks": checks,
         "matched_keywords": matched_keywords,
         "missing_keywords": [keyword for keyword in case.expected_keywords if keyword not in matched_keywords],
+        "routed_domains": routed_domains,
         "authorized_domains": response.get("authorized_domains", []),
         "observed_final_domains": observed_final_domains,
         "metrics": trace["metrics"],
         "compression_modes": _collect_compression_modes(trace["final_results"]),
         "compression_mode_counts": _count_compression_modes(trace["final_results"]),
         "stage_previews": {
+            "parent": [_document_summary(doc, "parent") for doc in trace.get("parent_results", [])[:3]],
             "vector": [_document_summary(doc, "vector") for doc in trace["vector_results"][:3]],
             "bm25": [_document_summary(doc, "bm25") for doc in trace["bm25_results"][:3]],
             "fused": [_document_summary(doc, "fused") for doc in trace["fused_results"][:3]],
@@ -302,16 +288,18 @@ def _print_human_report(index_health: dict[str, Any], results: list[dict[str, An
         compression = metrics["compression"]
         print(f"=== Case: {result['name']} ===")
         print(f"status={'PASS' if result['passed'] else 'FAIL'} query={result['query']}")
-        print(f"authorized_domains={result['authorized_domains']} observed_final_domains={result['observed_final_domains']}")
+        print(f"routed_domains={result['routed_domains']} authorized_domains={result['authorized_domains']} observed_final_domains={result['observed_final_domains']}")
         print(
             "stage_hits="
+            f"parent={metrics.get('parent_hit_count', 0)} "
             f"vector={metrics['vector_hit_count']} "
             f"bm25={metrics['bm25_hit_count']} "
             f"fused={metrics['fused_hit_count']} "
             f"reranked={metrics['reranked_hit_count']} "
             f"selected={metrics['selected_hit_count']} "
             f"final={metrics['final_hit_count']} "
-            f"shared_fused={metrics['shared_fused_hit_count']}"
+            f"shared_fused={metrics['shared_fused_hit_count']} "
+            f"two_stage={metrics.get('two_stage_applied', False)}"
         )
         print(
             "compression="
@@ -349,7 +337,7 @@ def main() -> int:
         rebuild_result = rebuild_index()
         print(json.dumps(rebuild_result, ensure_ascii=False, indent=2))
 
-    cases = _load_cases(args.case_file, args.query, args.username, args.domains)
+    cases = _load_cases(args.case_file, args.query, args.username)
     index_health = _collect_index_health()
     results = [_evaluate_case(case) for case in cases]
     summary = _summarize_results(results, index_health)

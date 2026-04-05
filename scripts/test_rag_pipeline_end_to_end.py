@@ -7,6 +7,7 @@ import re
 import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,7 @@ def _load_backend_attr(module_name: str, attr_name: str):
 DOCS_DIR = _load_backend_attr("rag_config", "DOCS_DIR")
 ES_ENABLED = _load_backend_attr("rag_config", "ES_ENABLED")
 ES_INDEX_NAME = _load_backend_attr("rag_config", "ES_INDEX_NAME")
+ES_PARENT_INDEX_NAME = _load_backend_attr("rag_config", "ES_PARENT_INDEX_NAME")
 list_docs_markdown_files = _load_backend_attr("documents_service", "list_docs_markdown_files")
 run_retrieval_pipeline = _load_backend_attr("retrieval_pipeline_service", "run_retrieval_pipeline")
 vectorstore = _load_backend_attr("rag_store", "vectorstore")
@@ -46,9 +48,11 @@ class GeneratedCase:
 	domains: list[str] = field(default_factory=list)
 	username: str = "anonymous"
 	expected_keywords: list[str] = field(default_factory=list)
+	forbidden_keywords: list[str] = field(default_factory=list)
 	expected_source_files: list[str] = field(default_factory=list)
 	expected_retrieved_context: list[dict[str, str]] = field(default_factory=list)
-	min_distinct_sources: int = 1
+	min_distinct_sources: int = 0
+	expect_context_non_empty: bool = True
 	note: str = ""
 
 
@@ -74,8 +78,53 @@ def _parse_args() -> argparse.Namespace:
 	return parser.parse_args()
 
 
+def _cleanup_previous_report_artifacts(report_dir: Path, report_prefix: str) -> list[str]:
+	removed_paths: list[str] = []
+	for path in report_dir.iterdir():
+		if not path.is_file():
+			continue
+		if path.name == "elasticsearch.log":
+			continue
+		if path.suffix not in {".json", ".md", ".log"}:
+			continue
+		path.unlink()
+		removed_paths.append(str(path))
+	return sorted(removed_paths)
+
+
 def _relative_source_file(path: Path) -> str:
 	return str(path.resolve().relative_to(DOCS_DIR.resolve())).replace("\\", "/")
+
+
+@lru_cache(maxsize=1)
+def _source_file_domain_map() -> dict[str, str]:
+	mapping: dict[str, str] = {}
+	for path in list_docs_markdown_files():
+		metadata, _ = _load_doc(path)
+		mapping[_relative_source_file(path)] = str(metadata.get("domain", "unknown"))
+	return mapping
+
+
+def _source_file_domain(source_file: str) -> str:
+	return _source_file_domain_map().get(source_file, "unknown")
+
+
+def _build_source_records(source_files: list[str], matched_source_files: set[str] | None = None) -> list[dict[str, Any]]:
+	records: list[dict[str, Any]] = []
+	seen: set[str] = set()
+	for source_file in source_files:
+		normalized_source_file = str(source_file).strip()
+		if not normalized_source_file or normalized_source_file in seen:
+			continue
+		seen.add(normalized_source_file)
+		record: dict[str, Any] = {
+			"source_file": normalized_source_file,
+			"domain": _source_file_domain(normalized_source_file),
+		}
+		if matched_source_files is not None:
+			record["matched"] = normalized_source_file in matched_source_files
+		records.append(record)
+	return records
 
 
 def _load_doc(path: Path) -> tuple[dict[str, Any], str]:
@@ -102,10 +151,150 @@ def _expected_chunk(source_file: str, chunk_text: str) -> dict[str, str]:
 	}
 
 
+def _build_readme_case_catalog() -> list[GeneratedCase]:
+	return [
+		GeneratedCase(
+			name="readme-01-user-login-params",
+			query="前端调登录接口的时候，需要传哪些参数？如果密码输错了会返回什么错误码？",
+			domains=["user-center"],
+			expected_keywords=["phone", "password", "10003"],
+			expected_source_files=["user-center/reference-api.md"],
+			expected_retrieved_context=[
+				_expected_chunk(
+					"user-center/reference-api.md",
+					"### 请求参数 (Request Body)\n| 字段名 | 类型 | 必填 | 说明 |\n|---|---|---|---|\n| phone | String | 是 | 11位手机号 |\n| password | String | 是 | 明文密码（前端需做基础校验） |\n\n### 业务错误码字典\n* `10003`: 密码错误",
+				),
+			],
+			note="README 测试问 1。",
+		),
+		GeneratedCase(
+			name="readme-02-order-amount-field",
+			query="订单表里的金额字段叫什么？它的数据类型和单位是什么？",
+			domains=["order-center"],
+			expected_keywords=["total_amount", "INT", "分"],
+			expected_source_files=["order-center/reference-db.md"],
+			expected_retrieved_context=[
+				_expected_chunk(
+					"order-center/reference-db.md",
+					"## 1. 核心订单主表 (t_order)\n本表存储订单的主干信息。由于数据量庞大，按 `user_id` 进行分库分表。\n\n| 字段名 | 数据类型 | 约束 | 业务说明 |\n|---|---|---|---|\n| order_no | VARCHAR(32) | 主键 | 订单号，使用雪花算法生成 |\n| user_id | BIGINT | 非空, 索引 | 下单用户的全网唯一ID |\n| total_amount | INT | 非空 | 订单最终支付总金额，**单位统一为分** |\n| order_status | VARCHAR(16) | 非空 | 当前订单状态，见状态枚举字典 |\n| created_at | DATETIME | 非空 | 订单落库时间 |",
+				),
+			],
+			note="README 测试问 2。",
+		),
+		GeneratedCase(
+			name="readme-03-order-cancel-status",
+			query="订单处于什么状态的时候，才允许被取消？",
+			domains=["order-center"],
+			expected_keywords=["INIT", "CANCELED"],
+			expected_source_files=["order-center/faq.md"],
+			expected_retrieved_context=[
+				_expected_chunk(
+					"order-center/faq.md",
+					"[FAQ: true] [类型: faq] 【用户常问】：订单处于什么状态时才允许取消？ 【标准解答】： 只有处于 `INIT`（初始化 / 待支付）状态的订单才允许取消。 取消成功后，订单状态会流转为 `CANCELED`。",
+				),
+			],
+			note="README 测试问 3。",
+		),
+		GeneratedCase(
+			name="readme-04-token-rationale",
+			query="为什么我们系统要搞 Access Token 和 Refresh Token 两个 Token？只用一个不行吗？",
+			domains=["user-center"],
+			expected_keywords=["Access Token", "Refresh Token", "2 小时", "30 天"],
+			expected_source_files=["user-center/explanation.md"],
+			expected_retrieved_context=[
+				_expected_chunk(
+					"user-center/explanation.md",
+					"## 2. Token 生命周期\n* **Access Token**: 有效期为 2 小时。用于请求各个微服务的业务接口。\n* **Refresh Token**: 有效期为 30 天。仅用于向【用户中心】换取新的 Access Token。",
+				),
+			],
+			note="README 测试问 4。",
+		),
+		GeneratedCase(
+			name="readme-05-order-id-policy",
+			query="后端在写创建订单接口的时候，订单号可以直接用数据库的自增 ID 吗？为什么？",
+			domains=["order-center"],
+			expected_keywords=["自增 ID", "IdGenerator.nextSnowflakeId", "雪花算法"],
+			expected_source_files=["order-center/howto-create.md", "order-center/faq.md"],
+			expected_retrieved_context=[
+				_expected_chunk(
+					"order-center/howto-create.md",
+					"## 1. 生成唯一订单号\n调用基础设施层的分布式 ID 生成服务 `IdGenerator.nextSnowflakeId()` 获取一个 64 位的订单号。绝对不要使用数据库自增 ID 以防泄露商业数据。",
+				),
+			],
+			note="README 测试问 5。",
+		),
+		GeneratedCase(
+			name="readme-06-order-timeout-flow",
+			query="如果用户下单了但一直不付款，这笔订单会怎么处理？会不会一直占着库存？",
+			domains=["order-center"],
+			expected_keywords=["15 分钟", "RocketMQ", "库存"],
+			expected_source_files=["order-center/explanation.md", "order-center/faq.md", "order-center/howto-create.md"],
+			expected_retrieved_context=[
+				_expected_chunk(
+					"order-center/explanation.md",
+					"## 2. 支付超时防悬挂机制\n电商场景下，库存极其珍贵。如果用户下单后迟迟不付款，会导致库存被恶意锁定。\n因此，【订单中心】规定：任何一笔处于 `INIT`（待支付）状态的普通订单，如果在创建后的 15 分钟内未收到支付成功回调，系统将触发“超时取消”机制，自动关闭订单并释放底层库存。",
+				),
+			],
+			note="README 测试问 6。",
+		),
+		GeneratedCase(
+			name="readme-07-cross-module-checkout",
+			query="当用户在 App 里面点击提交订单后，到最终支付成功，这中间的系统调用链路是怎样的？状态是怎么变的？",
+			domains=["global", "order-center", "payment-gateway"],
+			expected_keywords=["INIT", "PAID", "PaymentSuccessEvent", "订单中心", "支付网关"],
+			expected_source_files=["global-workflows/howto-checkout.md", "payment-gateway/faq-payment.md", "order-center/explanation.md"],
+			min_distinct_sources=2,
+			expected_retrieved_context=[
+				_expected_chunk(
+					"global-workflows/howto-checkout.md",
+					"## 4. 异步状态流转 (消息流转)\n当用户支付成功后，【支付网关】会收到微信的异步回调。此时支付网关必须发出 `PaymentSuccessEvent` 的 MQ 消息。\n【订单中心】监听到该消息后，负责将 `t_order` 表中的状态从 `INIT` 修改为 `PAID`，完成订单闭环。",
+				),
+			],
+			note="README 测试问 7。",
+		),
+		GeneratedCase(
+			name="readme-08-401-refresh-order-request",
+			query="如果前端请求下单接口的时候，报了 401 错误，前端应该怎么做？需要让用户重新输入账号密码吗？",
+			domains=["user-center", "order-center"],
+			expected_keywords=["401 Unauthorized", "/api/v1/user/refresh", "重新发起", "Access Token"],
+			expected_source_files=["user-center/howto-login.md"],
+			expected_retrieved_context=[
+				_expected_chunk(
+					"user-center/howto-login.md",
+					"## 4. 处理 Token 过期 (无感刷新)\n如果业务接口返回 HTTP 状态码 `401 Unauthorized`，说明 Access Token 已过期。前端需静默调用 `/api/v1/user/refresh` 接口换取新 Token，并重新发起刚才失败的业务请求。",
+				),
+			],
+			note="README 测试问 8。",
+		),
+		GeneratedCase(
+			name="readme-09-no-email-field",
+			query="登录接口里面，email 字段是必填的吗？",
+			domains=["user-center"],
+			expected_keywords=["phone", "password"],
+			forbidden_keywords=["email"],
+			expected_source_files=["user-center/reference-api.md"],
+			expected_retrieved_context=[
+				_expected_chunk(
+					"user-center/reference-api.md",
+					"### 请求参数 (Request Body)\n| 字段名 | 类型 | 必填 | 说明 |\n|---|---|---|---|\n| phone | String | 是 | 11位手机号 |\n| password | String | 是 | 明文密码（前端需做基础校验） |",
+				),
+			],
+			note="README 测试问 9。",
+		),
+		GeneratedCase(
+			name="readme-10-no-shipping-api-doc",
+			query="商家发货后，怎么对接顺丰快递的 API 获取物流单号？",
+			forbidden_keywords=["顺丰", "物流单号", "快递 API"],
+			expect_context_non_empty=False,
+			note="README 测试问 10。该用例主要检查检索结果里没有伪造的物流对接证据；最终生成层的诚实回答仍需结合 Copilot 输出人工确认。",
+		),
+	]
+
+
 def _build_case_catalog() -> list[GeneratedCase]:
 	cases: list[GeneratedCase] = []
 
-	for path in list_docs_markdown_files(include_module_directory=False):
+	for path in list_docs_markdown_files():
 		source_file = _relative_source_file(path)
 		metadata, content = _load_doc(path)
 		combined_text = f"{source_file}\n{metadata}\n{content}"
@@ -295,6 +484,7 @@ def _build_case_catalog() -> list[GeneratedCase]:
 				),
 			)
 
+	cases.extend(_build_readme_case_catalog())
 	return cases
 
 
@@ -313,6 +503,7 @@ def _collect_index_health() -> dict[str, Any]:
 
 	es_available = False
 	es_count = None
+	parent_es_count = None
 	es_error = None
 	if ES_ENABLED:
 		try:
@@ -322,6 +513,10 @@ def _collect_index_health() -> dict[str, Any]:
 				es_count = int(client.count(index=ES_INDEX_NAME).get("count", 0))
 			elif client is not None:
 				es_count = 0
+			if client is not None and client.indices.exists(index=ES_PARENT_INDEX_NAME):
+				parent_es_count = int(client.count(index=ES_PARENT_INDEX_NAME).get("count", 0))
+			elif client is not None:
+				parent_es_count = 0
 		except Exception as exc:
 			es_error = str(exc)
 
@@ -331,6 +526,8 @@ def _collect_index_health() -> dict[str, Any]:
 		"es_available": es_available,
 		"es_index_name": ES_INDEX_NAME,
 		"es_count": es_count,
+		"es_parent_index_name": ES_PARENT_INDEX_NAME,
+		"es_parent_count": parent_es_count,
 		"es_error": es_error,
 		"chunk_stats": chunk_stats,
 	}
@@ -338,16 +535,19 @@ def _collect_index_health() -> dict[str, Any]:
 
 def _clear_and_rebuild_indexes() -> dict[str, Any]:
 	deleted_vector_count = clear_vectorstore(vectorstore)
+	deleted_parent_es_count = 0
 	deleted_es_count = None
 	es_error = None
 
 	if ES_ENABLED:
 		try:
-			deleted_es_count = clear_es_index()
+			deleted_parent_es_count = clear_es_index(index_name=ES_PARENT_INDEX_NAME)
+			deleted_es_count = clear_es_index(index_name=ES_INDEX_NAME)
 		except Exception as exc:
 			es_error = str(exc)
 			raise
 	else:
+		deleted_parent_es_count = 0
 		deleted_es_count = 0
 
 	ingest_result = ingest_docs()
@@ -355,6 +555,7 @@ def _clear_and_rebuild_indexes() -> dict[str, Any]:
 
 	return {
 		"deleted_vector_count": deleted_vector_count,
+		"deleted_parent_es_count": deleted_parent_es_count,
 		"deleted_es_count": deleted_es_count,
 		"es_error": es_error,
 		"ingest_result": ingest_result,
@@ -401,6 +602,21 @@ def _aggregate_context_text_by_source(context_entries: list[dict[str, Any]]) -> 
 	return {source_file: "\n".join(parts) for source_file, parts in aggregated.items()}
 
 
+def _summarize_document_results(documents: list[Any], preview_length: int = 120) -> list[dict[str, Any]]:
+	return [
+		{
+			"source_file": doc.metadata.get("source_file", "unknown"),
+			"domain": doc.metadata.get("domain", "unknown"),
+			"parent_title": doc.metadata.get("parent_title", ""),
+			"rrf_score": doc.metadata.get("rrf_score"),
+			"vector_rank": doc.metadata.get("vector_rank"),
+			"bm25_rank": doc.metadata.get("bm25_rank"),
+			"preview": doc.page_content[:preview_length].replace("\n", " "),
+		}
+		for doc in documents
+	]
+
+
 def _matches_expected_context(expected_text: str, actual_text: str) -> bool:
 	normalized_expected = " ".join(expected_text.split()).lower()
 	normalized_actual = " ".join(actual_text.split()).lower()
@@ -424,7 +640,6 @@ def _evaluate_case(case: GeneratedCase) -> dict[str, Any]:
 	pipeline_result = run_retrieval_pipeline(
 		query=case.query,
 		username=case.username,
-		domains=case.domains,
 	)
 	response = pipeline_result["response"]
 	trace = pipeline_result["trace"]
@@ -433,8 +648,28 @@ def _evaluate_case(case: GeneratedCase) -> dict[str, Any]:
 	context_sources = _extract_context_sources(context_entries)
 	context_text = _extract_context_text(context_entries)
 	context_text_by_source = _aggregate_context_text_by_source(context_entries)
+	parent_results = trace.get("parent_results", [])
+	parent_stage_expected_source_files = case.expected_source_files
+	parent_stage_actual_sources = _extract_context_sources(
+		[
+			{
+				"metadata": doc.metadata,
+				"page_content": doc.page_content,
+			}
+			for doc in parent_results
+		]
+	)
+	expected_first_stage_sources = _build_source_records(parent_stage_expected_source_files, set(parent_stage_actual_sources))
+	observed_first_stage_sources = _build_source_records(parent_stage_actual_sources)
 	matched_keywords = [keyword for keyword in case.expected_keywords if keyword.lower() in context_text.lower()]
+	matched_forbidden_keywords = [keyword for keyword in case.forbidden_keywords if keyword.lower() in context_text.lower()]
 	keyword_check = len(matched_keywords) == len(case.expected_keywords)
+	forbidden_keywords_check = len(matched_forbidden_keywords) == 0
+	routed_domains = response.get("routed_domains", []) if isinstance(response, dict) else []
+	expanded_routed_domains = response.get("expanded_routed_domains", []) if isinstance(response, dict) else []
+	routed_domain_check_field = "expanded_routed_domains" if len(case.domains) > 1 else "routed_domains"
+	routed_domain_candidates = expanded_routed_domains if routed_domain_check_field == "expanded_routed_domains" else routed_domains
+	routed_domains_check = True if not case.domains else set(case.domains).issubset(set(routed_domain_candidates))
 	expected_context_matches = []
 	for expected_context in case.expected_retrieved_context:
 		expected_source_file = str(expected_context.get("source_file", "")).strip()
@@ -451,36 +686,73 @@ def _evaluate_case(case: GeneratedCase) -> dict[str, Any]:
 			}
 		)
 	expected_context_check = all(item["matched"] for item in expected_context_matches)
-	file_check = bool(case.expected_source_files) and any(
+	file_check = True if not case.expected_source_files else any(
 		source_file in context_sources for source_file in case.expected_source_files
 	)
+	parent_stage_source_check = True if not parent_stage_expected_source_files else any(
+		source_file in parent_stage_actual_sources for source_file in parent_stage_expected_source_files
+	)
+	parent_stage_expected_matches = [
+		{
+			"source_file": source_file,
+			"matched": source_file in parent_stage_actual_sources,
+		}
+		for source_file in parent_stage_expected_source_files
+	]
 	distinct_sources_check = len(context_sources) >= case.min_distinct_sources
-	passed = status == "success" and keyword_check and file_check and expected_context_check and distinct_sources_check and len(context_entries) > 0
+	context_non_empty_check = len(context_entries) > 0 if case.expect_context_non_empty else True
+	passed = (
+		status == "success"
+		and routed_domains_check
+		and context_non_empty_check
+		and keyword_check
+		and forbidden_keywords_check
+		and file_check
+		and expected_context_check
+		and parent_stage_source_check
+		and distinct_sources_check
+	)
 
 	return {
 		"name": case.name,
 		"query": case.query,
-		"domains": case.domains,
+		"expected_routed_domains": case.domains,
 		"username": case.username,
 		"note": case.note,
 		"expected_keywords": case.expected_keywords,
 		"expected_source_files": case.expected_source_files,
+		"expected_first_stage_sources": expected_first_stage_sources,
+		"observed_first_stage_sources": observed_first_stage_sources,
 		"min_distinct_sources": case.min_distinct_sources,
 		"status": status,
 		"passed": passed,
 		"checks": {
 			"status": status == "success",
-			"context_non_empty": len(context_entries) > 0,
+			"routed_domains": routed_domains_check,
+			"context_non_empty": context_non_empty_check,
 			"keywords": keyword_check,
+			"forbidden_keywords": forbidden_keywords_check,
 			"expected_source_file_present": file_check,
 			"expected_context_present": expected_context_check,
 			"distinct_sources": distinct_sources_check,
 		},
+		"routed_domain_check_field": routed_domain_check_field,
+		"observed_routed_domains": routed_domains,
+		"observed_expanded_routed_domains": expanded_routed_domains,
 		"matched_keywords": matched_keywords,
 		"missing_keywords": [keyword for keyword in case.expected_keywords if keyword not in matched_keywords],
+		"forbidden_keywords": case.forbidden_keywords,
+		"matched_forbidden_keywords": matched_forbidden_keywords,
 		"observed_context_sources": context_sources,
 		"observed_context_count": len(context_entries),
 		"expected_retrieved_context": expected_context_matches,
+		"first_stage_results": [
+			{
+				"source_file": doc.metadata.get("source_file", "unknown"),
+				"domain": doc.metadata.get("domain", "unknown"),
+			}
+			for doc in parent_results
+		],
 		"retrieved_chunks": [
 			{
 				"source_file": entry.get("metadata", {}).get("source_file", "unknown"),
@@ -541,7 +813,7 @@ def _summarize_report(index_health_before: dict[str, Any], index_health_after: d
 		"generated_at": datetime.now().isoformat(timespec="seconds"),
 		"corpus": {
 			"docs_dir": str(DOCS_DIR),
-			"doc_count": len(list_docs_markdown_files(include_module_directory=False)),
+			"doc_count": len(list_docs_markdown_files()),
 			"generated_case_count": len(generated_cases),
 			"case_names": [case.name for case in generated_cases],
 		},
@@ -561,6 +833,63 @@ def _summarize_report(index_health_before: dict[str, Any], index_health_after: d
 	}
 
 
+def _report_status(results: list[dict[str, Any]]) -> str:
+	return "success" if all(result["passed"] for result in results) else "failure"
+
+
+def _build_status_report(base_report: dict[str, Any], report_variant: str, overall_status: str) -> dict[str, Any]:
+	if report_variant not in {"all", "success", "failure"}:
+		raise ValueError(f"unsupported report variant: {report_variant}")
+
+	selected_results = list(base_report.get("results", []))
+	if report_variant == "success":
+		selected_results = [result for result in selected_results if result.get("passed")]
+	elif report_variant == "failure":
+		selected_results = [result for result in selected_results if not result.get("passed")]
+
+	passed_count = sum(1 for result in selected_results if result.get("passed"))
+	failed_cases = [result["name"] for result in selected_results if not result.get("passed")]
+	all_context_sources = sorted({source for result in selected_results for source in result.get("observed_context_sources", [])})
+	all_compression_modes = sorted({mode for result in selected_results for mode in result.get("compression_modes", [])})
+	base_report_copy = dict(base_report)
+	base_report_copy["status"] = overall_status
+	base_report_copy["report_variant"] = report_variant
+	base_report_copy["summary"] = {
+		"case_count": len(selected_results),
+		"passed_count": passed_count,
+		"failed_count": len(selected_results) - passed_count,
+		"passed_ratio": round(passed_count / len(selected_results), 4) if selected_results else 0.0,
+		"failed_cases": failed_cases,
+		"observed_context_sources": all_context_sources,
+		"compression_modes": all_compression_modes,
+	}
+	base_report_copy["results"] = selected_results
+	return base_report_copy
+
+
+def _write_report_artifacts(report_dir: Path, report_prefix: str, report: dict[str, Any], report_suffix: str) -> dict[str, str]:
+	timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+	file_prefix = f"{report_prefix}-{report_suffix}" if report_suffix else report_prefix
+	json_report_path = report_dir / f"{file_prefix}.json"
+	md_report_path = report_dir / f"{file_prefix}.md"
+	timestamp_json_report_path = report_dir / f"{file_prefix}-{timestamp}.json"
+	timestamp_md_report_path = report_dir / f"{file_prefix}-{timestamp}.md"
+	json_payload = json.dumps(report, ensure_ascii=False, indent=2)
+	json_report_path.write_text(json_payload, encoding="utf-8")
+	timestamp_json_report_path.write_text(json_payload, encoding="utf-8")
+
+	markdown_report = _render_markdown_report(report)
+	md_report_path.write_text(markdown_report, encoding="utf-8")
+	timestamp_md_report_path.write_text(markdown_report, encoding="utf-8")
+
+	return {
+		"json": str(json_report_path),
+		"markdown": str(md_report_path),
+		"timestamped_json": str(timestamp_json_report_path),
+		"timestamped_markdown": str(timestamp_md_report_path),
+	}
+
+
 def _render_markdown_report(report: dict[str, Any]) -> str:
 	summary = report["summary"]
 	index_before = report["index_health_before"]
@@ -571,6 +900,7 @@ def _render_markdown_report(report: dict[str, Any]) -> str:
 		"# RAG Pipeline End-to-End Report",
 		"",
 		f"Generated at: {report['generated_at']}",
+		f"Run status: {report.get('status', 'unknown')}",
 		f"Docs dir: {report['corpus']['docs_dir']}",
 		f"Generated cases: {report['corpus']['generated_case_count']} / docs scanned: {report['corpus']['doc_count']}",
 		"",
@@ -580,6 +910,7 @@ def _render_markdown_report(report: dict[str, Any]) -> str:
 		f"- ES available: {index_before['es_available']}",
 		f"- Deleted vector docs: {rebuild_result.get('deleted_vector_count', 0)}",
 		f"- Deleted ES docs: {rebuild_result.get('deleted_es_count', 0)}",
+		f"- Parent ES docs after: {index_after.get('es_parent_count')}",
 		f"- Vector docs after: {index_after['vector_count']}",
 		f"- ES docs after: {index_after['es_count']}",
 		"",
@@ -598,16 +929,38 @@ def _render_markdown_report(report: dict[str, Any]) -> str:
 				f"### {result['name']}",
 				f"- Status: {'PASS' if result['passed'] else 'FAIL'}",
 				f"- Query: {result['query']}",
-				f"- Domains: {result['domains'] or ['<global>']}",
+				f"- Expected routed domains: {result['expected_routed_domains'] or ['<auto-infer>']}",
+				f"- Observed routed domains: {result['observed_routed_domains'] or ['<none>']}",
+				f"- Observed expanded routed domains: {result.get('observed_expanded_routed_domains', []) or ['<none>']}",
+				f"- Routed domain check field: {result.get('routed_domain_check_field', 'routed_domains')}",
 				f"- Observed sources: {', '.join(result['observed_context_sources']) if result['observed_context_sources'] else 'none'}",
 				f"- Expected keywords: {', '.join(result['expected_keywords']) if result['expected_keywords'] else 'none'}",
 				f"- Matched keywords: {', '.join(result['matched_keywords']) if result['matched_keywords'] else 'none'}",
 				f"- Missing keywords: {', '.join(result['missing_keywords']) if result['missing_keywords'] else 'none'}",
+				f"- Forbidden keywords: {', '.join(result['forbidden_keywords']) if result['forbidden_keywords'] else 'none'}",
+				f"- Matched forbidden keywords: {', '.join(result['matched_forbidden_keywords']) if result['matched_forbidden_keywords'] else 'none'}",
 				f"- Stage hits: vector={result['metrics']['vector_hit_count']}, bm25={result['metrics']['bm25_hit_count']}, fused={result['metrics']['fused_hit_count']}, reranked={result['metrics']['reranked_hit_count']}, final={result['metrics']['final_hit_count']}",
 				f"- Compression: compressed_docs={result['metrics']['compression']['compressed_doc_count']}, saved_chars={result['metrics']['compression']['saved_char_count']}, saved_ratio={result['metrics']['compression']['saved_ratio']:.2%}",
 				"",
 			]
 		)
+		lines.append("#### First Stage")
+		if not result.get("expected_first_stage_sources"):
+			lines.append("- Expected first-stage sources: none")
+		else:
+			lines.append("- Expected first-stage sources:")
+			for expected_first_stage in result.get("expected_first_stage_sources", []):
+				lines.append(
+					f"  - {expected_first_stage.get('source_file', 'unknown')} | {expected_first_stage.get('domain', 'unknown')} | {'matched' if expected_first_stage.get('matched', False) else 'missing'}"
+				)
+		if not result.get("observed_first_stage_sources"):
+			lines.append("- Observed first-stage sources: none")
+		else:
+			lines.append("- Observed first-stage sources:")
+			for observed_first_stage in result.get("observed_first_stage_sources", []):
+				lines.append(
+					f"  - {observed_first_stage.get('source_file', 'unknown')} | {observed_first_stage.get('domain', 'unknown')}"
+				)
 		lines.append("#### Expected Retrieved Context")
 		if not result.get("expected_retrieved_context"):
 			lines.append("- none")
@@ -649,6 +1002,7 @@ def _render_markdown_report(report: dict[str, Any]) -> str:
 
 def _print_console_summary(report: dict[str, Any]) -> None:
 	summary = report["summary"]
+	report_paths = report["report_paths"]
 	print("=== RAG Pipeline End-to-End ===")
 	print(f"generated_at={report['generated_at']}")
 	print(f"docs_scanned={report['corpus']['doc_count']} cases_generated={report['corpus']['generated_case_count']}")
@@ -660,14 +1014,23 @@ def _print_console_summary(report: dict[str, Any]) -> None:
 		f"es_after={report['index_health_after']['es_count']}"
 	)
 	print(f"passed={summary['passed_count']}/{summary['case_count']} failed={summary['failed_cases'] or 'none'}")
-	print(f"report_json={report['report_paths']['json']}")
-	print(f"report_markdown={report['report_paths']['markdown']}")
+	print(f"report_all_json={report_paths['all']['json']}")
+	print(f"report_all_markdown={report_paths['all']['markdown']}")
+	print(f"report_success_json={report_paths['success']['json']}")
+	print(f"report_success_markdown={report_paths['success']['markdown']}")
+	print(f"report_failure_json={report_paths['failure']['json']}")
+	print(f"report_failure_markdown={report_paths['failure']['markdown']}")
 
 
 def main() -> int:
 	args = _parse_args()
 	report_dir = Path(args.report_dir)
 	report_dir.mkdir(parents=True, exist_ok=True)
+	removed_report_artifacts = _cleanup_previous_report_artifacts(report_dir, args.report_prefix)
+	if removed_report_artifacts:
+		print(f"Removed previous report artifacts: {len(removed_report_artifacts)}")
+		for removed_path in removed_report_artifacts:
+			print(f"- {removed_path}")
 
 	if args.augment_arxiv:
 		augmentation_result = _maybe_augment_corpus(True)
@@ -691,35 +1054,40 @@ def main() -> int:
 
 	index_health_after = _collect_index_health()
 	results = [_evaluate_case(case) for case in generated_cases]
-	report = _summarize_report(index_health_before, index_health_after, rebuild_result, generated_cases, results)
-	if augmentation_result["enabled"]:
-		report["augmentation_result"] = augmentation_result
-
-	timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-	json_report_path = report_dir / f"{args.report_prefix}.json"
-	md_report_path = report_dir / f"{args.report_prefix}.md"
-	timestamp_json_report_path = report_dir / f"{args.report_prefix}-{timestamp}.json"
-	timestamp_md_report_path = report_dir / f"{args.report_prefix}-{timestamp}.md"
-	report["report_paths"] = {
-		"json": str(json_report_path),
-		"markdown": str(md_report_path),
-		"timestamped_json": str(timestamp_json_report_path),
-		"timestamped_markdown": str(timestamp_md_report_path),
+	report_status = _report_status(results)
+	combined_report = _summarize_report(index_health_before, index_health_after, rebuild_result, generated_cases, results)
+	combined_report["status"] = report_status
+	combined_report["report_variant"] = "all"
+	combined_report["cleanup_result"] = {
+		"removed_report_artifacts": removed_report_artifacts,
+		"removed_report_artifact_count": len(removed_report_artifacts),
 	}
+	if augmentation_result["enabled"]:
+		combined_report["augmentation_result"] = augmentation_result
 
-	json_payload = json.dumps(report, ensure_ascii=False, indent=2)
-	json_report_path.write_text(json_payload, encoding="utf-8")
-	timestamp_json_report_path.write_text(json_payload, encoding="utf-8")
+	report_artifacts = {
+		"all": _write_report_artifacts(report_dir, args.report_prefix, combined_report, ""),
+		"success": _write_report_artifacts(
+			report_dir,
+			args.report_prefix,
+			_build_status_report(combined_report, "success", report_status),
+			"success",
+		),
+		"failure": _write_report_artifacts(
+			report_dir,
+			args.report_prefix,
+			_build_status_report(combined_report, "failure", report_status),
+			"failure",
+		),
+	}
+	combined_report["report_paths"] = report_artifacts
 
-	markdown_report = _render_markdown_report(report)
-	md_report_path.write_text(markdown_report, encoding="utf-8")
-	timestamp_md_report_path.write_text(markdown_report, encoding="utf-8")
-
-	_print_console_summary(report)
+	json_payload = json.dumps(combined_report, ensure_ascii=False, indent=2)
+	_print_console_summary(combined_report)
 	if args.json:
 		print(json_payload)
 	else:
-		print(markdown_report)
+		print(_render_markdown_report(combined_report))
 
 	return 0 if all(result["passed"] for result in results) else 1
 
