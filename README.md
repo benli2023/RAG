@@ -115,6 +115,49 @@ INFO: 召回 Top 3:
 
 ## 配置说明
 
+Elasticsearch 版本要求：
+
+- 最低可用版本建议为 `7.17`。
+- 更稳妥的推荐版本为 `8.x`。
+- 当前项目只使用基础索引、查询和删除接口，不依赖旧版 `2.x` 行为。
+
+本地安装建议使用官方 tarball，并放到用户目录下，避免把大文件提交到仓库：
+
+```bash
+mkdir -p "$HOME/.local/elasticsearch"
+curl -fL "https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-9.3.2-darwin-aarch64.tar.gz" \
+    -o "$HOME/.local/elasticsearch/elasticsearch-9.3.2-darwin-aarch64.tar.gz"
+tar -xzf "$HOME/.local/elasticsearch/elasticsearch-9.3.2-darwin-aarch64.tar.gz" \
+    -C "$HOME/.local/elasticsearch"
+rm "$HOME/.local/elasticsearch/elasticsearch-9.3.2-darwin-aarch64.tar.gz"
+```
+
+安装完成后，Elasticsearch 的根目录就是：
+
+```bash
+$HOME/.local/elasticsearch/elasticsearch-9.3.2
+```
+
+可以直接让启动脚本使用这个路径：
+
+```bash
+ES_HOME="$HOME/.local/elasticsearch/elasticsearch-9.3.2" ./scripts/start_elasticsearch.sh
+```
+
+这个脚本会复制一份干净的本地配置，然后以单节点、关闭安全认证的开发模式启动 Elasticsearch，方便后端直接用 `http://localhost:9200` 连接，也避免和第一次自动生成的安全配置冲突。
+
+如果是第一次启动，建议把等待时间调长一点，避免 Elasticsearch 还在初始化时就被脚本判定失败：
+
+```bash
+ES_STARTUP_TIMEOUT=180 ES_HOME="$HOME/.local/elasticsearch/elasticsearch-9.3.2" ./scripts/start_elasticsearch.sh
+```
+
+如果你想手动启动，也可以直接执行：
+
+```bash
+"$HOME/.local/elasticsearch/elasticsearch-9.3.2/bin/elasticsearch"
+```
+
 布尔配置统一收口在 `backend/rag_config.py`，支持“文件内默认值 + 环境变量覆盖”：
 
 ```python

@@ -6,7 +6,7 @@ from typing import Any
 from langchain_core.documents import Document
 
 from documents_service import build_chunk_id, sanitize_metadata
-from rag_config import ES_ENABLED, ES_INDEX_NAME, ES_URL
+from rag_config import ES_ENABLED, ES_ENABLED_CONFIGURED, ES_INDEX_NAME, ES_URL
 
 try:
     from elasticsearch import Elasticsearch
@@ -16,6 +16,7 @@ except ImportError:
 
 _es_client = None
 _es_unavailable_reason: str | None = None
+_es_disabled_warned = False
 
 _INDEX_BODY = {
     "mappings": {
@@ -43,22 +44,41 @@ def _mark_unavailable(reason: str) -> None:
         print(f"[elasticsearch] unavailable: {reason}")
 
 
+def _raise_unavailable() -> None:
+    reason = _es_unavailable_reason or "Elasticsearch is unavailable"
+    raise RuntimeError(f"Elasticsearch is unavailable: {reason}")
+
+
+def _warn_disabled(action: str) -> None:
+    global _es_disabled_warned
+
+    if _es_disabled_warned:
+        return
+
+    _es_disabled_warned = True
+    if ES_ENABLED_CONFIGURED:
+        reason = "disabled by config"
+    else:
+        reason = "not configured"
+    print(f"[elasticsearch] {reason}; skip {action}")
+
+
 def get_es_client():
     global _es_client
 
     if not ES_ENABLED:
-        _mark_unavailable("disabled by config")
+        _warn_disabled("client initialization")
         return None
 
     if _es_client is not None:
         return _es_client
 
     if _es_unavailable_reason is not None:
-        return None
+        _raise_unavailable()
 
     if Elasticsearch is None:
         _mark_unavailable("python package 'elasticsearch' is not installed")
-        return None
+        _raise_unavailable()
 
     try:
         client = Elasticsearch(ES_URL, request_timeout=5)
@@ -70,13 +90,14 @@ def get_es_client():
         return _es_client
     except Exception as exc:
         _mark_unavailable(str(exc))
-        return None
+        _raise_unavailable()
 
 
 def ensure_index(client=None) -> bool:
-    resolved_client = client or get_es_client()
-    if resolved_client is None:
+    if not ES_ENABLED:
         return False
+
+    resolved_client = client or get_es_client()
 
     if resolved_client.indices.exists(index=ES_INDEX_NAME):
         return True
@@ -88,7 +109,7 @@ def ensure_index(client=None) -> bool:
 def _build_es_source(doc: Document) -> tuple[str, dict[str, Any]]:
     metadata = sanitize_metadata(doc.metadata)
     chunk_index = int(metadata.get("chunk_index", 1))
-    chunk_id = build_chunk_id(metadata, chunk_index)
+    chunk_id = build_chunk_id(metadata, chunk_index, doc.page_content)
     source = {
         **metadata,
         "chunk_id": chunk_id,
@@ -106,8 +127,8 @@ def upsert_chunks_to_es(chunks: list[Document]) -> dict[str, Any]:
             "sync_seconds": 0,
         }
 
-    client = get_es_client()
-    if client is None:
+    if not ES_ENABLED:
+        _warn_disabled("BM25 upsert")
         return {
             "enabled": False,
             "index_name": ES_INDEX_NAME,
@@ -115,12 +136,24 @@ def upsert_chunks_to_es(chunks: list[Document]) -> dict[str, Any]:
             "sync_seconds": 0,
         }
 
+    client = get_es_client()
+
     ensure_index(client)
     operations: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    duplicate_count = 0
     for doc in chunks:
         chunk_id, source = _build_es_source(doc)
+        if chunk_id in seen_ids:
+            duplicate_count += 1
+            continue
+
+        seen_ids.add(chunk_id)
         operations.append({"index": {"_index": ES_INDEX_NAME, "_id": chunk_id}})
         operations.append(source)
+
+    if duplicate_count:
+        print(f"[elasticsearch] skipped {duplicate_count} duplicate chunks by chunk_id")
 
     sync_start = time.perf_counter()
     response = client.bulk(operations=operations, refresh=True)
@@ -134,7 +167,7 @@ def upsert_chunks_to_es(chunks: list[Document]) -> dict[str, Any]:
     return {
         "enabled": True,
         "index_name": ES_INDEX_NAME,
-        "indexed_count": max(len(chunks) - error_count, 0),
+        "indexed_count": max(len(seen_ids) - error_count, 0),
         "sync_seconds": round(sync_elapsed, 2),
     }
 
@@ -144,8 +177,12 @@ def delete_by_source_file_in_es(source_file: str) -> int:
     if not cleaned:
         raise ValueError("source_file is empty")
 
+    if not ES_ENABLED:
+        _warn_disabled("BM25 delete")
+        return 0
+
     client = get_es_client()
-    if client is None or not client.indices.exists(index=ES_INDEX_NAME):
+    if not client.indices.exists(index=ES_INDEX_NAME):
         return 0
 
     response = client.delete_by_query(
@@ -158,8 +195,12 @@ def delete_by_source_file_in_es(source_file: str) -> int:
 
 
 def clear_es_index() -> int:
+    if not ES_ENABLED:
+        _warn_disabled("BM25 clear")
+        return 0
+
     client = get_es_client()
-    if client is None or not client.indices.exists(index=ES_INDEX_NAME):
+    if not client.indices.exists(index=ES_INDEX_NAME):
         return 0
 
     response = client.delete_by_query(
@@ -172,9 +213,14 @@ def clear_es_index() -> int:
 
 
 def search_bm25_documents(query: str, source_files: list[str] | None, limit: int) -> list[Document]:
-    client = get_es_client()
-    if client is None or limit <= 0:
+    if limit <= 0:
         return []
+
+    if not ES_ENABLED:
+        _warn_disabled("BM25 search")
+        return []
+
+    client = get_es_client()
 
     filters: list[dict[str, Any]] = []
     if source_files:

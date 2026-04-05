@@ -16,7 +16,7 @@ def _document_key(doc: Document) -> str:
     chunk_index = metadata.get("chunk_index")
     if source_file not in (None, "") and chunk_index not in (None, ""):
         try:
-            normalized_chunk_id = build_chunk_id(metadata, int(chunk_index))
+            normalized_chunk_id = build_chunk_id(metadata, int(chunk_index), doc.page_content)
             doc.metadata["chunk_id"] = normalized_chunk_id
             return normalized_chunk_id
         except (TypeError, ValueError):

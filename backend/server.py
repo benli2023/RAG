@@ -21,18 +21,33 @@ if DASHBOARD_DIR.exists():
     app.mount("/static-dashboard", StaticFiles(directory=str(DASHBOARD_DIR)), name="static-dashboard")
 
 
+_progress_line_length = 0
+
+
 def _print_progress(current: int, total: int, prefix: str = "Progress", width: int = 30) -> None:
+    global _progress_line_length
+
     if total <= 0:
         return
 
     filled = int(width * current / total)
     bar = "█" * filled + "-" * (width - filled)
-    sys.stdout.write(f"{prefix} |{bar}| {current}/{total}\n")
+    message = f"{prefix} |{bar}| {current}/{total}"
+    padding = max(_progress_line_length - len(message), 0)
+    sys.stdout.write(f"\r{message}{' ' * padding}")
+    _progress_line_length = len(message)
     sys.stdout.flush()
 
 
 def _finish_progress() -> None:
+    global _progress_line_length
+
+    sys.stdout.write("\r")
+    if _progress_line_length:
+        sys.stdout.write(" " * _progress_line_length)
+        sys.stdout.write("\r")
     sys.stdout.write("\n")
+    _progress_line_length = 0
     sys.stdout.flush()
 
 # ================= 3. 核心业务字典：意图路由配置 =================
@@ -47,11 +62,13 @@ def ingest_docs():
     total_files = len(md_files)
     
     for file_index, file_path in enumerate(md_files, start=1):
-        print(f"[{file_index}/{total_files}] Processing file: {os.path.basename(file_path)}")
         file_chunks = split_single_markdown_file(file_path, docs_dir)
         final_chunks.extend(file_chunks)
-        _print_progress(file_index, total_files, prefix="Ingest files")
-        print(f"  -> {len(file_chunks)} chunks generated, {len(final_chunks)} total stored chunks so far")
+        _print_progress(
+            file_index,
+            total_files,
+            prefix=f"Ingest {os.path.basename(file_path)}",
+        )
 
     _finish_progress()
 
@@ -60,8 +77,9 @@ def ingest_docs():
         return {"message": f"未找到可入库的 Markdown 内容，共扫描 {len(md_files)} 个文件。"}
     upsert_result = upsert_chunks(final_chunks, embedding_function, vectorstore)
     es_upsert_result = upsert_chunks_to_es(final_chunks)
+    es_sync_message = "并已同步检索索引。" if es_upsert_result["enabled"] else "，但未启用 ES BM25，同步已跳过。"
     return {
-        "message": f"成功处理 {len(md_files)} 个文件，生成 {len(final_chunks)} 个带域标签的 Chunk，并已同步检索索引。",
+        "message": f"成功处理 {len(md_files)} 个文件，生成 {len(final_chunks)} 个带域标签的 Chunk{es_sync_message}",
         "sub_chunking_enabled": ENABLE_SUB_CHUNKING,
         "embed_seconds": upsert_result["embed_seconds"],
         "add_documents_seconds": upsert_result["add_documents_seconds"],
@@ -193,9 +211,10 @@ def update_document_chunks(req: SourceFileRequest):
     chunks = split_single_markdown_file(file_path, docs_dir)
     upsert_result = upsert_chunks(chunks, embedding_function, vectorstore)
     es_upsert_result = upsert_chunks_to_es(chunks)
+    es_sync_message = "" if es_upsert_result["enabled"] else "，但未启用 ES BM25，同步已跳过"
 
     return {
-        "message": f"已完成 source_file={req.source_file} 的重建更新。",
+        "message": f"已完成 source_file={req.source_file} 的重建更新{es_sync_message}。",
         "source_file": req.source_file,
         "deleted_count": deleted_vector_count,
         "deleted_vector_count": deleted_vector_count,

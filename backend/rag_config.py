@@ -69,6 +69,14 @@ def _build_runtime_health() -> dict[str, object]:
 		})
 		field_severities["chunking.enable_sub_chunking"] = "warning"
 
+	if not ES_ENABLED:
+		alerts.append({
+			"severity": "warning",
+			"title": "Elasticsearch BM25 未启用",
+			"message": "当前未配置 ES BM25 召回，系统会仅使用向量召回并跳过 ES 写入与 BM25 检索。",
+		})
+		field_severities["retrieval.es_enabled"] = "warning"
+
 	error_count = sum(1 for item in alerts if item["severity"] == "error")
 	warning_count = sum(1 for item in alerts if item["severity"] == "warning")
 	status = "error" if error_count else "warning" if warning_count else "ok"
@@ -120,11 +128,12 @@ FUSION_TOP_K = max(FINAL_CONTEXT_K, _get_int_config("FUSION_TOP_K", 10))
 # RRF 公式平滑参数
 RRF_K = max(1, _get_int_config("RRF_K", 60))
 # 是否启用上下文压缩
-CONTEXT_COMPRESSION_ENABLED = _get_bool_config("CONTEXT_COMPRESSION_ENABLED", True)
+CONTEXT_COMPRESSION_ENABLED = _get_bool_config("CONTEXT_COMPRESSION_ENABLED", False)
 # 每个文档压缩后保留的句子数量
 CONTEXT_COMPRESSION_SENTENCE_K = max(1, _get_int_config("CONTEXT_COMPRESSION_SENTENCE_K", 3))
 # 是否启用 Elasticsearch BM25 召回
 ES_ENABLED = _get_bool_config("ES_ENABLED", True)
+ES_ENABLED_CONFIGURED = os.getenv("ES_ENABLED") is not None
 # 是否启用 BGE Reranker 精排
 # 可直接修改这里；如需按环境覆盖，可设置 RERANKER_ENABLED=true/false
 RERANKER_ENABLED = _get_bool_config("RERANKER_ENABLED", True)
@@ -177,6 +186,7 @@ def get_runtime_config() -> dict[str, object]:
 			"embedding_model_path": str(LOCAL_MODEL_PATH),
 			"reranker_model_path": str(LOCAL_RERANKER_PATH),
 			"es_enabled": ES_ENABLED,
+			"es_enabled_configured": ES_ENABLED_CONFIGURED,
 			"es_url": ES_URL,
 			"es_index_name": ES_INDEX_NAME,
 		},

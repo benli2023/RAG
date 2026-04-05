@@ -120,10 +120,12 @@ def assert_document_access(path: Path, username: str) -> None:
     )
 
 
-def build_chunk_id(metadata: dict, chunk_index: int) -> str:
+def build_chunk_id(metadata: dict, chunk_index: int, content: str | None = None) -> str:
     domain, doc_type, headers = extract_context_labels(metadata)
     source_file = str(metadata.get("source_file", ""))
-    raw_key = f"{domain}|{doc_type}|{headers}|{source_file}|{chunk_index}"
+    normalized_content = " ".join(str(content or "").split())
+    content_digest = hashlib.sha256(normalized_content.encode("utf-8")).hexdigest()
+    raw_key = f"{domain}|{doc_type}|{headers}|{source_file}|{chunk_index}|{content_digest}"
     return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 
 
@@ -161,7 +163,7 @@ def _protect_fenced_blocks(text: str) -> tuple[str, dict[str, str]]:
 
     return FENCED_BLOCK_PATTERN.sub(_replace, text), placeholders
 
-
+ 
 def _restore_fenced_blocks(text: str, placeholders: dict[str, str]) -> str:
     for placeholder, block in placeholders.items():
         text = text.replace(placeholder, block)
@@ -192,6 +194,7 @@ def split_single_markdown_file(file_path: Path, docs_dir: Path) -> List[Document
 
     md_chunks = markdown_splitter.split_text(text_content)
     final_chunks: List[Document] = []
+    next_chunk_index = 1
 
     for chunk in md_chunks:
         chunk.metadata.update(yaml_metadata)
@@ -213,19 +216,21 @@ def split_single_markdown_file(file_path: Path, docs_dir: Path) -> List[Document
                 page_content=faq_content,
                 metadata={
                     **faq_metadata,
-                    "chunk_index": 1,
+                    "chunk_index": next_chunk_index,
                 },
             ))
+            next_chunk_index += 1
             continue
 
         protected_content, placeholders = _protect_fenced_blocks(chunk.page_content)
         protected_chunk = Document(page_content=protected_content, metadata=chunk.metadata.copy())
         sub_chunks = text_splitter.split_documents([protected_chunk]) if ENABLE_SUB_CHUNKING else [protected_chunk]
-        for sub_chunk_index, doc in enumerate(sub_chunks, start=1):
+        for doc in sub_chunks:
             doc.page_content = _restore_fenced_blocks(doc.page_content, placeholders)
             if not doc.page_content.strip():
                 continue
-            doc.metadata["chunk_index"] = sub_chunk_index
+            doc.metadata["chunk_index"] = next_chunk_index
             final_chunks.append(doc)
+            next_chunk_index += 1
 
     return final_chunks

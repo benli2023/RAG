@@ -1,10 +1,29 @@
 import time
-from typing import List
+import sys
+from typing import Iterable, List
 
 from langchain_core.documents import Document
 
 from documents_service import build_chunk_id, sanitize_metadata
 from retrieval_response_formatter import extract_context_labels
+
+
+DEFAULT_EMBEDDING_BATCH_SIZE = 32
+_progress_line_length = 0
+
+
+def _write_progress_line(message: str) -> None:
+    global _progress_line_length
+
+    padding = max(_progress_line_length - len(message), 0)
+    sys.stdout.write(f"\r{message}{' ' * padding}")
+    _progress_line_length = len(message)
+    sys.stdout.flush()
+
+
+def _batch_iter(items: list[str], batch_size: int) -> Iterable[tuple[int, list[str]]]:
+    for start_index in range(0, len(items), batch_size):
+        yield start_index, items[start_index : start_index + batch_size]
 
 
 def upsert_chunks(chunks: List[Document], embedding_function, vectorstore) -> dict:
@@ -15,29 +34,76 @@ def upsert_chunks(chunks: List[Document], embedding_function, vectorstore) -> di
             "add_documents_seconds": 0,
         }
 
-    ids = [build_chunk_id(doc.metadata, int(doc.metadata.get("chunk_index", 1))) for doc in chunks]
-    documents = [doc.page_content for doc in chunks]
-    metadatas = [sanitize_metadata(doc.metadata) for doc in chunks]
+    unique_ids = []
+    unique_documents = []
+    unique_metadatas = []
+    seen_ids = set()
+    duplicate_count = 0
 
-    print(f"[embed_documents] start embedding {len(chunks)} chunks with local BGE model...")
+    for doc in chunks:
+        chunk_id = build_chunk_id(doc.metadata, int(doc.metadata.get("chunk_index", 1)), doc.page_content)
+        if chunk_id in seen_ids:
+            duplicate_count += 1
+            continue
+
+        seen_ids.add(chunk_id)
+        unique_ids.append(chunk_id)
+        unique_documents.append(doc.page_content)
+        unique_metadatas.append(sanitize_metadata(doc.metadata))
+
+    if duplicate_count:
+        print(f"[upsert_chunks] skipped {duplicate_count} duplicate chunks by chunk_id")
+
+    total_documents = len(unique_documents)
+    batch_size = min(DEFAULT_EMBEDDING_BATCH_SIZE, total_documents)
+    _write_progress_line(f"[embed_documents] 0/{total_documents} (0%) start embedding chunks")
     add_start = time.perf_counter()
-    embeddings = embedding_function.embed_documents(documents)
+    embeddings = []
+    embedded_count = 0
+
+    for batch_start, document_batch in _batch_iter(unique_documents, batch_size):
+        batch_start_time = time.perf_counter()
+        batch_embeddings = embedding_function.embed_documents(document_batch)
+        embeddings.extend(batch_embeddings)
+        embedded_count += len(document_batch)
+        batch_elapsed = time.perf_counter() - batch_start_time
+        progress_ratio = embedded_count / total_documents if total_documents else 1.0
+        _write_progress_line(
+            f"[embed_documents] {embedded_count}/{total_documents} ({progress_ratio:.0%}) "
+            f"batch={batch_start // batch_size + 1} size={len(document_batch)} "
+            f"batch_seconds={batch_elapsed:.2f}s"
+        )
+
     embed_elapsed = time.perf_counter() - add_start
 
-    print(f"[embed_documents] embedded {len(chunks)} chunks in {embed_elapsed:.2f}s")
-    print(f"[add_documents] start upserting {len(chunks)} chunks...")
+    global _progress_line_length
+
+    sys.stdout.write("\r")
+    if _progress_line_length:
+        sys.stdout.write(" " * _progress_line_length)
+        sys.stdout.write("\r")
+    _progress_line_length = 0
+    sys.stdout.flush()
+    print(f"[embed_documents] embedded {len(unique_documents)} chunks in {embed_elapsed:.2f}s")
+    _write_progress_line(f"[add_documents] upserting {len(unique_documents)} chunks")
     upsert_start = time.perf_counter()
     vectorstore._collection.upsert(
-        ids=ids,
-        documents=documents,
-        metadatas=metadatas,
+        ids=unique_ids,
+        documents=unique_documents,
+        metadatas=unique_metadatas,
         embeddings=embeddings,
     )
     add_elapsed = time.perf_counter() - upsert_start
-    print(f"[add_documents] upserted {len(chunks)} chunks in {add_elapsed:.2f}s")
+    sys.stdout.write("\r")
+    if _progress_line_length:
+        sys.stdout.write(" " * _progress_line_length)
+        sys.stdout.write("\r")
+    _progress_line_length = 0
+    sys.stdout.flush()
+    print(f"[add_documents] upserted {len(unique_documents)} chunks in {add_elapsed:.2f}s")
 
     return {
-        "chunk_count": len(chunks),
+        "chunk_count": len(unique_documents),
         "embed_seconds": round(embed_elapsed, 2),
         "add_documents_seconds": round(add_elapsed, 2),
     }
