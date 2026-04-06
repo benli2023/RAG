@@ -14,6 +14,7 @@ from es_service import clear_es_index, delete_by_source_file_in_es, upsert_chunk
 from rag_config import DASHBOARD_DIR, DASHBOARD_INDEX, DOCS_DIR, ENABLE_ACL, ENABLE_PARENT_CHILD_RETRIEVAL, ENABLE_SUB_CHUNKING, ES_INDEX_NAME, ES_PARENT_INDEX_NAME, get_runtime_config
 from rag_store import embedding_function, parent_vectorstore, vectorstore
 from retrieval_pipeline_service import run_retrieval_pipeline
+from retrieval_strategy_config import get_routing_runtime_config
 from vectorstore_service import clear_vectorstore, delete_by_source_file, get_chunk_statistics, get_grouped_source_files_from_vectorstore, upsert_chunks
 
 app = FastAPI()
@@ -157,7 +158,9 @@ def get_chunk_stats():
 
 @app.get("/config")
 def get_config():
-    return get_runtime_config()
+    runtime_config = get_runtime_config()
+    runtime_config["routing"] = get_routing_runtime_config()
+    return runtime_config
 
 
 @app.get("/", include_in_schema=False)
@@ -284,6 +287,8 @@ def retrieve_context(req: QueryRequest):
     pipeline_result = run_retrieval_pipeline(
         query=req.query,
         username=req.username,
+        domains=req.domains,
+        query_type=req.query_type,
     )
     return pipeline_result["response"]
 

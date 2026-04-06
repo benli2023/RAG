@@ -46,6 +46,8 @@ def build_retrieval_response(
     authorized_domains: list[str],
     authorized_source_files: list[str],
     username: str,
+    query_type: str,
+    diagnostics: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "context": context,
@@ -55,4 +57,6 @@ def build_retrieval_response(
         "authorized_domains": authorized_domains,
         "authorized_source_files": authorized_source_files,
         "username": username,
+        "query_type": query_type,
+        "diagnostics": diagnostics,
     }

@@ -18,3 +18,5 @@ my_local_bge_retriever_db/
 .DS_Store
 Thumbs.db
 elasticsearch-9.3.2
+logs/
+.tmp/

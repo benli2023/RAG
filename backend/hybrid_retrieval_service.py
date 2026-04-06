@@ -36,20 +36,27 @@ def _document_key(doc: Document) -> str:
     return hashlib.sha256(doc.page_content.encode("utf-8")).hexdigest()
 
 
-def reciprocal_rank_fusion(vector_results: list[Document], bm25_results: list[Document], k: int = 60) -> list[Document]:
+def reciprocal_rank_fusion(
+    vector_results: list[Document],
+    bm25_results: list[Document],
+    k: int = 60,
+    vector_weight: float = 1.0,
+    bm25_weight: float = 1.0,
+) -> list[Document]:
     rrf_scores: dict[str, float] = {}
     fused_docs: dict[str, Document] = {}
 
-    def add_channel(results: list[Document], channel_name: str) -> None:
+    def add_channel(results: list[Document], channel_name: str, weight: float) -> None:
         for rank, doc in enumerate(results, start=1):
             doc_key = _document_key(doc)
             if doc_key not in fused_docs:
                 fused_docs[doc_key] = Document(page_content=doc.page_content, metadata=dict(doc.metadata))
 
             fused_doc = fused_docs[doc_key]
-            score = 1.0 / (k + rank)
+            score = weight * (1.0 / (k + rank))
             rrf_scores[doc_key] = rrf_scores.get(doc_key, 0.0) + score
             fused_doc.metadata[f"{channel_name}_rank"] = rank
+            fused_doc.metadata[f"{channel_name}_weight"] = weight
             fused_doc.metadata["rrf_score"] = round(rrf_scores[doc_key], 6)
 
             retrieval_sources = list(fused_doc.metadata.get("retrieval_sources", []))
@@ -57,8 +64,8 @@ def reciprocal_rank_fusion(vector_results: list[Document], bm25_results: list[Do
                 retrieval_sources.append(channel_name)
             fused_doc.metadata["retrieval_sources"] = retrieval_sources
 
-    add_channel(vector_results, "vector")
-    add_channel(bm25_results, "bm25")
+    add_channel(vector_results, "vector", vector_weight)
+    add_channel(bm25_results, "bm25", bm25_weight)
 
     return sorted(
         fused_docs.values(),

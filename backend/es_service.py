@@ -244,6 +244,7 @@ def search_bm25_documents(
     source_files: list[str] | None,
     limit: int,
     domains: list[str] | None = None,
+    faq_only: bool = False,
     index_name: str = ES_INDEX_NAME,
 ) -> list[Document]:
     if limit <= 0:
@@ -260,6 +261,8 @@ def search_bm25_documents(
         filters.append({"terms": {"source_file": source_files}})
     if domains:
         filters.append({"terms": {"domain": domains}})
+    if faq_only:
+        filters.append({"term": {"is_faq": True}})
 
     response = client.search(
         index=index_name,

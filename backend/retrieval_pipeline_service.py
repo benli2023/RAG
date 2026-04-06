@@ -8,10 +8,11 @@ from langchain_core.documents import Document
 from access_control import build_source_file_filter, dedupe_values, load_document_access_manifest, normalize_username, resolve_accessible_sources
 from context_compression_service import compress_context
 from es_service import search_bm25_documents
-from faq_support import rank_results_for_generation
+from faq_support import is_faq_document, rank_results_for_generation
 from hybrid_retrieval_service import reciprocal_rank_fusion
 from rag_config import BM25_RECALL_K, CONTEXT_COMPRESSION_ENABLED, CONTEXT_COMPRESSION_MIN_CHARS, CONTEXT_COMPRESSION_SENTENCE_K, DOCS_DIR, ENABLE_ACL, ENABLE_PARENT_CHILD_RETRIEVAL, FINAL_CONTEXT_K, FUSION_TOP_K, PARENT_RECALL_K, RERANKER_ENABLED, RRF_K, ES_INDEX_NAME, ES_PARENT_INDEX_NAME, USERNAME_GROUP_MAPPING_FILE, VECTOR_RECALL_K
 from rag_store import parent_vectorstore, vectorstore
+from retrieval_strategy_config import get_retrieval_strategy_plan, normalize_query_type
 from reranker_service import rerank_documents
 from retrieval_response_formatter import build_context_entry, build_retrieval_response
 
@@ -55,6 +56,13 @@ def _extract_routed_domains(documents: list[Document], fallback_source_files: li
     if deduped:
         return deduped
     return _resolve_domains_for_source_files(fallback_source_files)
+
+
+def _merge_domain_lists(*domain_lists: list[str]) -> list[str]:
+    merged: list[str] = []
+    for domain_list in domain_lists:
+        merged.extend(domain_list)
+    return dedupe_values(merged)
 
 
 def _extract_primary_domains(documents: list[Document], fallback_source_files: list[str]) -> list[str]:
@@ -107,6 +115,11 @@ def _resolve_source_files_for_scope(source_files: list[str], domains: list[str])
         and (domain_set is None or str(entry["domain"]).strip() in domain_set)
     ]
     return dedupe_values(resolved_source_files)
+
+
+def _list_all_source_files() -> list[str]:
+    manifest = load_document_access_manifest(DOCS_DIR)
+    return dedupe_values([str(entry["source_file"]).strip() for entry in manifest if str(entry["source_file"]).strip()])
 
 
 def _build_trace(
@@ -192,6 +205,104 @@ def _extract_source_files(documents: list[Document]) -> list[str]:
     return dedupe_values(source_files)
 
 
+def _filter_faq_documents(documents: list[Document]) -> list[Document]:
+    return [doc for doc in documents if is_faq_document(doc.metadata)]
+
+
+def _is_sql_query_candidate(query: str) -> bool:
+    normalized_query = query.lower()
+    sql_markers = (
+        "sql",
+        "select",
+        "from",
+        "where",
+        "table",
+        "数据库",
+        "数据库字段",
+        "表",
+        "字段",
+        "列",
+        "主键",
+        "索引",
+        "枚举",
+        "状态字典",
+        "接口参数",
+        "请求参数",
+        "返回字段",
+    )
+    return any(marker in normalized_query for marker in sql_markers)
+
+
+def _resolve_sql_source_files(source_files: list[str], domains: list[str], query: str) -> list[str]:
+    normalized_source_files = dedupe_values(source_files)
+    normalized_domains = dedupe_values(domains)
+    source_file_set = set(normalized_source_files) if normalized_source_files else None
+    domain_set = set(normalized_domains) if normalized_domains else None
+    query_lower = query.lower()
+
+    prefer_reference_db = any(marker in query_lower for marker in ("数据库", "表", "字段", "列", "主键", "索引", "sql", "select", "from", "where"))
+    prefer_reference_api = any(marker in query_lower for marker in ("接口", "api", "请求", "返回", "参数", "token", "登录", "认证"))
+
+    if prefer_reference_db and prefer_reference_api:
+        preferred_suffixes = {"reference-db.md", "reference-api.md"}
+    elif prefer_reference_db:
+        preferred_suffixes = {"reference-db.md"}
+    elif prefer_reference_api:
+        preferred_suffixes = {"reference-api.md"}
+    else:
+        preferred_suffixes = {"reference-db.md", "reference-api.md"}
+
+    manifest = load_document_access_manifest(DOCS_DIR)
+    structured_source_files: list[str] = []
+    for entry in manifest:
+        source_file = str(entry["source_file"]).strip()
+        domain = str(entry["domain"]).strip()
+        if not source_file:
+            continue
+        if source_file_set is not None and source_file not in source_file_set:
+            continue
+        if domain_set is not None and domain not in domain_set:
+            continue
+        if not any(source_file.endswith(suffix) for suffix in preferred_suffixes):
+            continue
+        structured_source_files.append(source_file)
+
+    if structured_source_files:
+        return dedupe_values(structured_source_files)
+
+    return normalized_source_files
+
+
+def _resolve_faq_source_files(source_files: list[str], domains: list[str]) -> list[str]:
+    if not source_files and not domains:
+        return []
+
+    source_file_set = set(dedupe_values(source_files)) if source_files else None
+    domain_set = set(dedupe_values(domains)) if domains else None
+    collection = vectorstore._collection
+    records = collection.get(include=["metadatas"])
+    metadatas = records.get("metadatas", [])
+
+    faq_source_files: list[str] = []
+    for metadata in metadatas:
+        if not isinstance(metadata, dict):
+            continue
+        if not is_faq_document(metadata):
+            continue
+
+        source_file = str(metadata.get("source_file", "")).strip()
+        domain = str(metadata.get("domain", "")).strip()
+        if not source_file:
+            continue
+        if source_file_set is not None and source_file not in source_file_set:
+            continue
+        if domain_set is not None and domain not in domain_set:
+            continue
+        faq_source_files.append(source_file)
+
+    return dedupe_values(faq_source_files)
+
+
 def _collection_count(resolved_vectorstore) -> int:
     try:
         return int(resolved_vectorstore._collection.count())
@@ -199,52 +310,90 @@ def _collection_count(resolved_vectorstore) -> int:
         return 0
 
 
-def run_retrieval_pipeline(query: str, username: str) -> dict[str, Any]:
+def _build_observability_payload(
+    query_type: str,
+    retrieval_plan: dict[str, Any],
+    requested_domains: list[str],
+    target_domains: list[str],
+    routed_domains: list[str],
+    expanded_routed_domains: list[str],
+    target_source_file_count: int,
+    two_stage_applied: bool,
+    two_stage_fallback_reason: str,
+    requested_execution_mode: str,
+    resolved_execution_mode: str,
+) -> dict[str, Any]:
+    return {
+        "query_type": query_type,
+        "strategy": str(retrieval_plan.get("strategy", "unknown")),
+        "requested_execution_mode": requested_execution_mode,
+        "execution_mode": resolved_execution_mode,
+        "mode_fallback_applied": requested_execution_mode != resolved_execution_mode,
+        "weights": {
+            "vector": float(retrieval_plan.get("vector_weight", 1.0)),
+            "bm25": float(retrieval_plan.get("bm25_weight", 1.0)),
+        },
+        "recall": {
+            "vector_k": int(retrieval_plan.get("vector_k", VECTOR_RECALL_K)),
+            "bm25_k": int(retrieval_plan.get("bm25_k", BM25_RECALL_K)),
+            "fusion_top_k": int(retrieval_plan.get("fusion_top_k", FUSION_TOP_K)),
+            "final_context_k": FINAL_CONTEXT_K,
+        },
+        "requested_domains": requested_domains,
+        "target_domains": target_domains,
+        "routed_domains": routed_domains,
+        "expanded_routed_domains": expanded_routed_domains,
+        "target_source_file_count": target_source_file_count,
+        "two_stage_applied": two_stage_applied,
+        "two_stage_fallback_reason": two_stage_fallback_reason,
+    }
+
+
+def run_retrieval_pipeline(query: str, username: str, domains: list[str] | None = None, query_type: str | None = None) -> dict[str, Any]:
     normalized_query = query.strip()
     normalized_username = normalize_username(username)
-    authorized_source_files, restricted_source_files, authorized_domains = resolve_accessible_sources(
-        normalized_username,
-        [],
-        DOCS_DIR,
-        USERNAME_GROUP_MAPPING_FILE,
-    )
-    has_candidate_documents = bool(authorized_source_files or restricted_source_files)
-    filter_value = build_source_file_filter(authorized_source_files) if authorized_source_files else None
+    normalized_requested_domains = dedupe_values(domains or [])
+    normalized_query_type = normalize_query_type(query_type)
+    retrieval_plan = get_retrieval_strategy_plan(normalized_query_type)
+    requested_execution_mode = str(retrieval_plan.get("execution_mode", "hybrid")).strip() or "hybrid"
+    supported_execution_modes = {"hybrid", "faq_lookup", "sql_query"}
+    resolved_execution_mode = requested_execution_mode if requested_execution_mode in supported_execution_modes else "hybrid"
+    requested_scope_source_files = _resolve_source_files_for_scope([], normalized_requested_domains) if normalized_requested_domains else _list_all_source_files()
+    has_candidate_documents = bool(requested_scope_source_files)
+    filter_value = build_source_file_filter(requested_scope_source_files) if requested_scope_source_files else None
     trace = _build_trace(
         query=normalized_query,
         username=normalized_username,
-        requested_domains=[],
-        authorized_domains=authorized_domains,
-        authorized_source_files=authorized_source_files,
-        restricted_source_files=restricted_source_files,
+        requested_domains=normalized_requested_domains,
+        authorized_domains=normalized_requested_domains,
+        authorized_source_files=requested_scope_source_files,
+        restricted_source_files=[],
         filter_value=filter_value,
     )
+    trace["query_type"] = normalized_query_type
+    trace["retrieval_plan"] = retrieval_plan
+    trace["requested_execution_mode"] = requested_execution_mode
+    trace["resolved_execution_mode"] = resolved_execution_mode
 
-    if ENABLE_ACL and restricted_source_files and not authorized_source_files:
-        denied_domains = _extract_denied_domains(restricted_source_files)
-        print(f"⛔ ACL deny user={normalized_username}, denied_files={restricted_source_files}, requested_domains=[inferred-global]")
-        response = {
-            "status": "forbidden",
-            "message": f"用户 {normalized_username} 无权访问当前命中的知识文档。",
-            "username": normalized_username,
-            "denied_domains": denied_domains,
-            "denied_source_files": restricted_source_files,
-        }
-        return {
-            "status": "forbidden",
-            "response": response,
-            "trace": trace,
-        }
-
-    if authorized_source_files:
-        if ENABLE_ACL:
-            print(f"🔐 全局检索已按文档 ACL 收敛，允许文档数={len(authorized_source_files)}，user={normalized_username}")
-        else:
-            print(f"🌐 全局检索启用，当前可检索文档数={len(authorized_source_files)}，user={normalized_username}")
+    if requested_scope_source_files:
+        print(f"🌐 全局检索启用，当前候选文档数={len(requested_scope_source_files)}，user={normalized_username}")
     else:
         print(f"🌐 接收到检索请求，但当前没有可检索文档，user={normalized_username}")
 
     if not has_candidate_documents:
+        diagnostics = _build_observability_payload(
+            query_type=normalized_query_type,
+            retrieval_plan=retrieval_plan,
+            requested_domains=normalized_requested_domains,
+            target_domains=normalized_requested_domains,
+            routed_domains=[],
+            expanded_routed_domains=[],
+            target_source_file_count=0,
+            two_stage_applied=False,
+            two_stage_fallback_reason="no-candidate-documents",
+            requested_execution_mode=requested_execution_mode,
+            resolved_execution_mode=resolved_execution_mode,
+        )
         response = build_retrieval_response(
             context=[],
             routed_domains=[],
@@ -253,6 +402,8 @@ def run_retrieval_pipeline(query: str, username: str) -> dict[str, Any]:
             authorized_domains=[],
             authorized_source_files=[],
             username=normalized_username,
+            query_type=normalized_query_type,
+            diagnostics=diagnostics,
         )
         return {
             "status": "success",
@@ -263,20 +414,22 @@ def run_retrieval_pipeline(query: str, username: str) -> dict[str, Any]:
     parent_results: list[Document] = []
     parent_vector_results: list[Document] = []
     parent_bm25_results: list[Document] = []
-    narrowed_source_files = list(authorized_source_files)
-    narrowed_domains = list(authorized_domains)
+    narrowed_source_files = list(requested_scope_source_files)
+    narrowed_domains = list(normalized_requested_domains)
+    effective_authorized_source_files = []
+    effective_authorized_domains = []
     routed_domains = _resolve_domains_for_source_files(narrowed_source_files)
     expanded_routed_domains = list(routed_domains)
     two_stage_applied = False
     two_stage_fallback_reason = "disabled"
 
-    if ENABLE_PARENT_CHILD_RETRIEVAL and authorized_source_files:
-        parent_scope_source_files = _resolve_source_files_for_scope(authorized_source_files, authorized_domains)
+    if ENABLE_PARENT_CHILD_RETRIEVAL and requested_scope_source_files:
+        parent_scope_source_files = _resolve_source_files_for_scope(requested_scope_source_files, normalized_requested_domains) if normalized_requested_domains else requested_scope_source_files
         parent_filter_value = build_source_file_filter(parent_scope_source_files) if parent_scope_source_files else None
         parent_collection_count = _collection_count(parent_vectorstore)
         print(
             f"INFO: 阶段一父文档双路召回，parent_k={PARENT_RECALL_K}, "
-            f"authorized_docs={len(authorized_source_files)}, authorized_domains={authorized_domains}, filter={parent_filter_value}"
+            f"authorized_docs={len(requested_scope_source_files)}, authorized_domains={normalized_requested_domains}, filter={parent_filter_value}"
         )
         if parent_collection_count > 0:
             if parent_filter_value is not None:
@@ -288,8 +441,8 @@ def run_retrieval_pipeline(query: str, username: str) -> dict[str, Any]:
 
         parent_bm25_results = search_bm25_documents(
             query=normalized_query,
-            source_files=authorized_source_files or None,
-            domains=authorized_domains or None,
+            source_files=requested_scope_source_files or None,
+            domains=normalized_requested_domains or None,
             index_name=ES_PARENT_INDEX_NAME,
             limit=PARENT_RECALL_K,
         )
@@ -305,9 +458,44 @@ def run_retrieval_pipeline(query: str, username: str) -> dict[str, Any]:
                 if _should_expand_related_domains(parent_results):
                     narrowed_domains = list(expanded_routed_domains)
 
-                narrowed_source_files = _resolve_source_files_for_scope(authorized_source_files, narrowed_domains)
-                if not narrowed_source_files:
-                    narrowed_source_files = parent_target_source_files
+                combined_domains = _merge_domain_lists(normalized_requested_domains, narrowed_domains)
+                combined_source_files, restricted_source_files, combined_authorized_domains = resolve_accessible_sources(
+                    normalized_username,
+                    combined_domains,
+                    DOCS_DIR,
+                    USERNAME_GROUP_MAPPING_FILE,
+                )
+                if ENABLE_ACL and not combined_source_files:
+                    denied_domains = combined_domains or _extract_denied_domains(restricted_source_files)
+                    print(
+                        f"⛔ ACL deny user={normalized_username}, denied_files={restricted_source_files}, "
+                        f"effective_domains={combined_domains or ['inferred-global']}"
+                    )
+                    response = {
+                        "status": "forbidden",
+                        "message": f"用户 {normalized_username} 无权访问当前命中的知识文档。",
+                        "username": normalized_username,
+                        "denied_domains": denied_domains,
+                        "denied_source_files": restricted_source_files,
+                    }
+                    trace["authorized_domains"] = []
+                    trace["authorized_source_files"] = []
+                    return {
+                        "status": "forbidden",
+                        "response": response,
+                        "trace": trace,
+                    }
+                if combined_source_files:
+                    effective_authorized_source_files = combined_source_files
+                    effective_authorized_domains = combined_authorized_domains or combined_domains
+                    narrowed_source_files = combined_source_files
+                    narrowed_domains = combined_authorized_domains or combined_domains
+                else:
+                    narrowed_domains = combined_domains
+                    narrowed_source_files = _resolve_source_files_for_scope(requested_scope_source_files, narrowed_domains)
+                    if not narrowed_source_files:
+                        narrowed_source_files = parent_target_source_files
+                    effective_authorized_domains = narrowed_domains
                 two_stage_applied = True
                 two_stage_fallback_reason = "applied"
                 print(
@@ -323,30 +511,123 @@ def run_retrieval_pipeline(query: str, username: str) -> dict[str, Any]:
 
     child_filter_value = build_source_file_filter(narrowed_source_files) if narrowed_source_files else filter_value
 
-    print(
-        f"INFO: 执行混合召回，parent_enabled={ENABLE_PARENT_CHILD_RETRIEVAL}, parent_k={PARENT_RECALL_K}, "
-        f"two_stage_applied={two_stage_applied}, vector_k={VECTOR_RECALL_K}, bm25_k={BM25_RECALL_K}, "
-        f"fusion_top_k={FUSION_TOP_K}, final_top_k={FINAL_CONTEXT_K}, "
-        f"reranker_enabled={RERANKER_ENABLED}, target_files={len(narrowed_source_files)}, target_domains={narrowed_domains}, filter={child_filter_value}"
-    )
+    if resolved_execution_mode == "faq_lookup":
+        faq_source_files = _resolve_faq_source_files(
+            narrowed_source_files or requested_scope_source_files,
+            narrowed_domains or effective_authorized_domains or normalized_requested_domains,
+        )
+        faq_filter_value = build_source_file_filter(faq_source_files) if faq_source_files else child_filter_value
+        print(
+            f"INFO: 执行 FAQ 专用召回，parent_enabled={ENABLE_PARENT_CHILD_RETRIEVAL}, parent_k={PARENT_RECALL_K}, "
+            f"two_stage_applied={two_stage_applied}, query_type={normalized_query_type}, strategy={retrieval_plan['strategy']}, "
+            f"requested_execution_mode={requested_execution_mode}, execution_mode={resolved_execution_mode}, "
+            f"vector_k={retrieval_plan['vector_k']}, bm25_k={retrieval_plan['bm25_k']}, "
+            f"vector_weight={retrieval_plan['vector_weight']}, bm25_weight={retrieval_plan['bm25_weight']}, "
+            f"fusion_top_k={retrieval_plan['fusion_top_k']}, final_top_k={FINAL_CONTEXT_K}, "
+            f"target_files={len(faq_source_files) if faq_source_files else len(narrowed_source_files)}, target_domains={narrowed_domains}, filter={faq_filter_value}"
+        )
 
-    if child_filter_value is not None:
-        vector_results = vectorstore.similarity_search(normalized_query, k=VECTOR_RECALL_K, filter=child_filter_value)
+        if faq_filter_value is not None:
+            vector_results = vectorstore.similarity_search(normalized_query, k=int(retrieval_plan["vector_k"]), filter=faq_filter_value)
+        else:
+            vector_results = vectorstore.similarity_search(normalized_query, k=int(retrieval_plan["vector_k"]))
+        vector_results = _filter_faq_documents(vector_results)
+
+        bm25_results = search_bm25_documents(
+            query=normalized_query,
+            source_files=faq_source_files or narrowed_source_files or requested_scope_source_files or None,
+            domains=narrowed_domains or None,
+            faq_only=True,
+            index_name=ES_INDEX_NAME,
+            limit=int(retrieval_plan["bm25_k"]),
+        )
+        bm25_results = _filter_faq_documents(bm25_results)
+
+        print(f"INFO: FAQ 专用召回完成，vector_hits={len(vector_results)}, bm25_hits={len(bm25_results)}")
+
+        fused_results = reciprocal_rank_fusion(
+            vector_results,
+            bm25_results,
+            k=RRF_K,
+            vector_weight=float(retrieval_plan["vector_weight"]),
+            bm25_weight=float(retrieval_plan["bm25_weight"]),
+        )[: int(retrieval_plan["fusion_top_k"])]
+        print(f"INFO: FAQ 专用 RRF 融合完成，fused_hits={len(fused_results)}")
+    elif resolved_execution_mode == "sql_query":
+        sql_source_files = _resolve_sql_source_files(
+            narrowed_source_files or requested_scope_source_files,
+            narrowed_domains or effective_authorized_domains or normalized_requested_domains,
+            normalized_query,
+        )
+        sql_filter_value = build_source_file_filter(sql_source_files) if sql_source_files else child_filter_value
+        sql_target_source_files = sql_source_files or narrowed_source_files
+        print(
+            f"INFO: 执行结构化查询，parent_enabled={ENABLE_PARENT_CHILD_RETRIEVAL}, parent_k={PARENT_RECALL_K}, "
+            f"two_stage_applied={two_stage_applied}, query_type={normalized_query_type}, strategy={retrieval_plan['strategy']}, "
+            f"requested_execution_mode={requested_execution_mode}, execution_mode={resolved_execution_mode}, "
+            f"vector_k={retrieval_plan['vector_k']}, bm25_k={retrieval_plan['bm25_k']}, "
+            f"vector_weight={retrieval_plan['vector_weight']}, bm25_weight={retrieval_plan['bm25_weight']}, "
+            f"fusion_top_k={retrieval_plan['fusion_top_k']}, final_top_k={FINAL_CONTEXT_K}, "
+            f"target_files={len(sql_target_source_files)}, target_domains={narrowed_domains}, filter={sql_filter_value}"
+        )
+
+        if sql_filter_value is not None:
+            vector_results = vectorstore.similarity_search(normalized_query, k=int(retrieval_plan["vector_k"]), filter=sql_filter_value)
+        else:
+            vector_results = vectorstore.similarity_search(normalized_query, k=int(retrieval_plan["vector_k"]))
+
+        bm25_results = search_bm25_documents(
+            query=normalized_query,
+            source_files=sql_target_source_files or narrowed_source_files or requested_scope_source_files or None,
+            domains=narrowed_domains or None,
+            index_name=ES_INDEX_NAME,
+            limit=int(retrieval_plan["bm25_k"]),
+        )
+
+        print(f"INFO: 结构化查询召回完成，vector_hits={len(vector_results)}, bm25_hits={len(bm25_results)}")
+
+        fused_results = reciprocal_rank_fusion(
+            vector_results,
+            bm25_results,
+            k=RRF_K,
+            vector_weight=float(retrieval_plan["vector_weight"]),
+            bm25_weight=float(retrieval_plan["bm25_weight"]),
+        )[: int(retrieval_plan["fusion_top_k"])]
+        print(f"INFO: 结构化查询 RRF 融合完成，fused_hits={len(fused_results)}")
     else:
-        vector_results = vectorstore.similarity_search(normalized_query, k=VECTOR_RECALL_K)
+        print(
+            f"INFO: 执行混合召回，parent_enabled={ENABLE_PARENT_CHILD_RETRIEVAL}, parent_k={PARENT_RECALL_K}, "
+            f"two_stage_applied={two_stage_applied}, query_type={normalized_query_type}, strategy={retrieval_plan['strategy']}, "
+            f"requested_execution_mode={requested_execution_mode}, execution_mode={resolved_execution_mode}, "
+            f"vector_k={retrieval_plan['vector_k']}, bm25_k={retrieval_plan['bm25_k']}, "
+            f"vector_weight={retrieval_plan['vector_weight']}, bm25_weight={retrieval_plan['bm25_weight']}, "
+            f"fusion_top_k={retrieval_plan['fusion_top_k']}, final_top_k={FINAL_CONTEXT_K}, "
+            f"reranker_enabled={RERANKER_ENABLED}, target_files={len(narrowed_source_files)}, target_domains={narrowed_domains}, filter={child_filter_value}"
+        )
 
-    bm25_results = search_bm25_documents(
-        query=normalized_query,
-        source_files=authorized_source_files or None,
-        domains=narrowed_domains or None,
-        index_name=ES_INDEX_NAME,
-        limit=BM25_RECALL_K,
-    )
+        if child_filter_value is not None:
+            vector_results = vectorstore.similarity_search(normalized_query, k=int(retrieval_plan["vector_k"]), filter=child_filter_value)
+        else:
+            vector_results = vectorstore.similarity_search(normalized_query, k=int(retrieval_plan["vector_k"]))
 
-    print(f"INFO: 混合召回完成，vector_hits={len(vector_results)}, bm25_hits={len(bm25_results)}")
+        bm25_results = search_bm25_documents(
+            query=normalized_query,
+            source_files=narrowed_source_files or requested_scope_source_files or None,
+            domains=narrowed_domains or None,
+            index_name=ES_INDEX_NAME,
+            limit=int(retrieval_plan["bm25_k"]),
+        )
 
-    fused_results = reciprocal_rank_fusion(vector_results, bm25_results, k=RRF_K)[:FUSION_TOP_K]
-    print(f"INFO: RRF 融合完成，fused_hits={len(fused_results)}")
+        print(f"INFO: 混合召回完成，vector_hits={len(vector_results)}, bm25_hits={len(bm25_results)}")
+
+        fused_results = reciprocal_rank_fusion(
+            vector_results,
+            bm25_results,
+            k=RRF_K,
+            vector_weight=float(retrieval_plan["vector_weight"]),
+            bm25_weight=float(retrieval_plan["bm25_weight"]),
+        )[: int(retrieval_plan["fusion_top_k"])]
+        print(f"INFO: RRF 融合完成，fused_hits={len(fused_results)}")
 
     reranked_results = rank_results_for_generation(normalized_query, rerank_documents(normalized_query, fused_results))
     selected_results = reranked_results[:FINAL_CONTEXT_K]
@@ -372,7 +653,9 @@ def run_retrieval_pipeline(query: str, username: str) -> dict[str, Any]:
     trace["parent_vector_results"] = parent_vector_results
     trace["parent_bm25_results"] = parent_bm25_results
     trace["parent_target_source_files"] = _extract_source_files(parent_results) if two_stage_applied else []
-    trace["requested_domains"] = []
+    trace["requested_domains"] = normalized_requested_domains
+    trace["authorized_domains"] = effective_authorized_domains
+    trace["authorized_source_files"] = effective_authorized_source_files
     trace["routed_domains"] = routed_domains
     trace["expanded_routed_domains"] = expanded_routed_domains
     trace["vector_results"] = vector_results
@@ -393,11 +676,31 @@ def run_retrieval_pipeline(query: str, username: str) -> dict[str, Any]:
         "selected_hit_count": len(selected_results),
         "final_hit_count": len(final_results),
         "shared_fused_hit_count": sum(1 for doc in fused_results if len(doc.metadata.get("retrieval_sources", [])) > 1),
+        "query_type": normalized_query_type,
+        "strategy": retrieval_plan["strategy"],
+        "requested_execution_mode": requested_execution_mode,
+        "execution_mode": resolved_execution_mode,
+        "vector_weight": retrieval_plan["vector_weight"],
+        "bm25_weight": retrieval_plan["bm25_weight"],
         "two_stage_enabled": ENABLE_PARENT_CHILD_RETRIEVAL,
         "two_stage_applied": two_stage_applied,
         "two_stage_fallback_reason": two_stage_fallback_reason,
         "compression": compression_metrics,
     }
+
+    diagnostics = _build_observability_payload(
+        query_type=normalized_query_type,
+        retrieval_plan=retrieval_plan,
+        requested_domains=normalized_requested_domains,
+        target_domains=narrowed_domains or effective_authorized_domains or normalized_requested_domains,
+        routed_domains=routed_domains,
+        expanded_routed_domains=expanded_routed_domains,
+        target_source_file_count=len(narrowed_source_files),
+        two_stage_applied=two_stage_applied,
+        two_stage_fallback_reason=two_stage_fallback_reason,
+        requested_execution_mode=requested_execution_mode,
+        resolved_execution_mode=resolved_execution_mode,
+    )
 
     context = [
         build_context_entry(index, doc.metadata, doc.page_content)
@@ -409,9 +712,11 @@ def run_retrieval_pipeline(query: str, username: str) -> dict[str, Any]:
         routed_domains=routed_domains,
         expanded_routed_domains=expanded_routed_domains,
         routed_source_files=narrowed_source_files,
-        authorized_domains=authorized_domains,
-        authorized_source_files=authorized_source_files,
+        authorized_domains=effective_authorized_domains,
+        authorized_source_files=effective_authorized_source_files,
         username=normalized_username,
+        query_type=normalized_query_type,
+        diagnostics=diagnostics,
     )
     return {
         "status": "success",
