@@ -17,3 +17,4 @@ my_local_bge_retriever_db/
 .vscode/
 .DS_Store
 Thumbs.db
+elasticsearch-9.3.2

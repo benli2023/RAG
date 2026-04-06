@@ -158,6 +158,15 @@ ES_STARTUP_TIMEOUT=180 ES_HOME="$HOME/.local/elasticsearch/elasticsearch-9.3.2" 
 "$HOME/.local/elasticsearch/elasticsearch-9.3.2/bin/elasticsearch"
 ```
 
+Windows users can use the bundled repository copy directly from PowerShell:
+
+```powershell
+.\scripts\start_elasticsearch_windows.ps1
+.\scripts\stop_elasticsearch_windows.ps1
+```
+
+By default, the Windows scripts look for `./elasticsearch-9.3.2` under the project root. You can still override that with `ES_HOME` or `ELASTICSEARCH_BIN` if you want to point at a separate installation.
+
 布尔配置统一收口在 `backend/rag_config.py`，支持“文件内默认值 + 环境变量覆盖”：
 
 ```python
@@ -190,6 +199,16 @@ RERANKER_ENABLED = _get_bool_config("RERANKER_ENABLED", True)
 ```bash
 RERANKER_ENABLED=false python backend/server.py
 ```
+
+嵌入模型也可以通过环境变量覆盖。默认会优先加载本地的 `my_local_bge_m3`，如果 Windows 的内存/分页文件不足导致加载失败，会自动回退到更轻量的 `intfloat/multilingual-e5-small`：
+
+```bash
+EMBEDDING_MODEL_NAME=./my_local_bge_m3
+EMBEDDING_FALLBACK_MODEL_NAME=intfloat/multilingual-e5-small
+EMBEDDING_DEVICE=cpu
+```
+
+如果你本机的分页文件太小，优先增大虚拟内存仍然是最稳妥的做法；这个回退只是为了让服务尽量能启动并继续工作。
 
 ACL 和子分块的临时覆盖方式相同：
 
