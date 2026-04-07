@@ -2,6 +2,7 @@ import glob
 import hashlib
 import json
 import re
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, List
 
@@ -9,6 +10,7 @@ import frontmatter
 from fastapi import HTTPException
 from langchain_core.documents import Document
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
+import yaml
 
 from access_control import (
     is_document_accessible,
@@ -28,26 +30,7 @@ from rag_config import DOCS_DIR, ENABLE_SUB_CHUNKING, USERNAME_GROUP_MAPPING_FIL
 from retrieval_response_formatter import extract_context_labels
 
 FENCED_BLOCK_PATTERN = re.compile(r"```[\w-]*\n.*?\n```", re.DOTALL)
-PARENT_FAQ_QUESTION_LIMIT = 8
-
-DOMAIN_ALIAS_MAP: dict[str, list[str]] = {
-    "global": ["global", "全局", "跨模块", "全链路", "调用链路", "链路", "工作流", "workflow"],
-    "order-center": ["order-center", "订单中心", "订单模块", "订单状态", "创单", "下单", "t_order", "INIT", "PAID", "CANCELED"],
-    "payment-gateway": ["payment-gateway", "支付网关", "支付模块", "支付", "预支付", "支付回调", "PaymentSuccessEvent", "统一下单"],
-    "user-center": ["user-center", "用户中心", "鉴权", "登录", "Token", "Access Token", "Refresh Token", "401 Unauthorized"],
-}
-
-PARENT_SALIENT_PATTERNS = [
-    re.compile(pattern, re.IGNORECASE)
-    for pattern in [
-        r"PaymentSuccessEvent",
-        r"INIT|PAID|CANCELED|SUCCESS|SIGN_ERROR",
-        r"/api/v\d+/",
-        r"MQ|RocketMQ|回调|异步|状态|流转|链路|系统|依赖",
-        r"订单中心|支付网关|用户中心|API 网关|库存服务",
-        r"Access Token|Refresh Token|Token|鉴权",
-    ]
-]
+MODULE_DIRECTORY_FILE = DOCS_DIR / "module-directory.yaml"
 
 
 def list_docs_markdown_files() -> List[Path]:
@@ -133,6 +116,10 @@ def _normalize_metadata_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
 
 
+def _normalize_search_text(value: Any) -> str:
+    return re.sub(r"\s+", "", str(value or "")).lower()
+
+
 def _normalize_metadata_keywords(value: Any) -> list[str]:
     if isinstance(value, list):
         raw_keywords = value
@@ -169,6 +156,53 @@ def _normalize_related_domains(value: Any, current_domain: str) -> list[str]:
     return normalized_domains
 
 
+@lru_cache(maxsize=1)
+def _load_module_directory_payload() -> dict[str, Any]:
+    if not MODULE_DIRECTORY_FILE.is_file():
+        return {}
+
+    with open(MODULE_DIRECTORY_FILE, "r", encoding="utf-8") as file_handle:
+        payload = yaml.safe_load(file_handle)
+
+    return payload if isinstance(payload, dict) else {}
+
+
+def _build_domain_alias_map() -> dict[str, list[str]]:
+    payload = _load_module_directory_payload()
+    modules = payload.get("modules", [])
+    if not isinstance(modules, list):
+        return {}
+
+    alias_map: dict[str, list[str]] = {}
+    for module in modules:
+        if not isinstance(module, dict):
+            continue
+
+        domain = _normalize_metadata_text(module.get("domain"))
+        if not domain:
+            continue
+
+        aliases: list[str] = [domain]
+        aliases.extend(_normalize_metadata_keywords(module.get("keywords")))
+
+        files = module.get("files", [])
+        if isinstance(files, list):
+            for file_item in files:
+                if not isinstance(file_item, dict):
+                    continue
+                aliases.extend(_normalize_metadata_keywords(file_item.get("keywords")))
+
+        unique_aliases: list[str] = []
+        for alias in aliases:
+            cleaned_alias = _normalize_metadata_text(alias)
+            if cleaned_alias and cleaned_alias not in unique_aliases:
+                unique_aliases.append(cleaned_alias)
+
+        alias_map[domain] = unique_aliases
+
+    return alias_map
+
+
 def _protect_fenced_blocks(text: str) -> tuple[str, dict[str, str]]:
     placeholders: dict[str, str] = {}
 
@@ -179,7 +213,7 @@ def _protect_fenced_blocks(text: str) -> tuple[str, dict[str, str]]:
 
     return FENCED_BLOCK_PATTERN.sub(_replace, text), placeholders
 
- 
+
 def _restore_fenced_blocks(text: str, placeholders: dict[str, str]) -> str:
     for placeholder, block in placeholders.items():
         text = text.replace(placeholder, block)
@@ -209,22 +243,22 @@ def _load_markdown_payload(file_path: Path, docs_dir: Path) -> tuple[str, dict[s
 
 def _extract_related_domains(text_content: str, yaml_metadata: dict[str, Any], source_file: str) -> list[str]:
     current_domain = str(yaml_metadata.get("domain", "global")).strip()
-    doc_type = str(yaml_metadata.get("type", "document")).strip().lower()
-    explicit_related_domains = _normalize_related_domains(yaml_metadata.get("related_domains"), current_domain)
+    explicit_related_domains = _normalize_related_domains(yaml_metadata.get("related_domains"), "")
     if explicit_related_domains:
         return explicit_related_domains
 
-    if doc_type == "catalog":
-        return [current_domain] if current_domain else []
-
     normalized_text = f"{source_file}\n{text_content}".lower()
+    compact_text = _normalize_search_text(f"{source_file}\n{text_content}")
     domain_scores: dict[str, int] = {}
-    for domain_name, aliases in DOMAIN_ALIAS_MAP.items():
+    for domain_name, aliases in _build_domain_alias_map().items():
         score = 0
         for alias in aliases:
             alias_text = alias.lower()
+            compact_alias = _normalize_search_text(alias)
             if alias_text and alias_text in normalized_text:
                 score += normalized_text.count(alias_text)
+            elif compact_alias and compact_alias in compact_text:
+                score += compact_text.count(compact_alias)
         if score > 0:
             domain_scores[domain_name] = score
 
@@ -309,6 +343,20 @@ def _build_child_documents(text_content: str, yaml_metadata: dict[str, Any], sou
             continue
 
         protected_content, placeholders = _protect_fenced_blocks(chunk.page_content)
+        
+        description = _normalize_metadata_text(yaml_metadata.get("description"))
+        keywords = yaml_metadata.get("keywords", [])
+        keywords_str = ", ".join(keywords) if isinstance(keywords, list) else str(keywords)
+        
+        injection_text = ""
+        if description:
+            injection_text += f"[文档描述: {description}]\n"
+        if keywords_str:
+            injection_text += f"[文档关键词: {keywords_str}]\n"
+            
+        if injection_text and chunk.page_content.strip():
+            protected_content = f"{injection_text}{protected_content}"
+
         protected_chunk = Document(page_content=protected_content, metadata=chunk.metadata.copy())
         sub_chunks = text_splitter.split_documents([protected_chunk]) if ENABLE_SUB_CHUNKING else [protected_chunk]
         for doc in sub_chunks:

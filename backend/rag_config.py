@@ -118,7 +118,7 @@ ES_PARENT_INDEX_NAME = os.getenv("ES_PARENT_INDEX_NAME", f"{ES_INDEX_NAME}_paren
 # 初始召回的候选文档数量
 RETRIEVAL_K = 12
 # 最终传入大模型的上下文片段数量
-FINAL_CONTEXT_K = max(1, _get_int_config("FINAL_CONTEXT_K", 3))
+FINAL_CONTEXT_K = max(1, _get_int_config("FINAL_CONTEXT_K", 6))
 # 向量召回数量
 VECTOR_RECALL_K = max(RETRIEVAL_K, _get_int_config("VECTOR_RECALL_K", 20))
 # BM25 召回数量

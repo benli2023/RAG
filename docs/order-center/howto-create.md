@@ -21,6 +21,8 @@ keywords:
   - 事务
   - 延迟 MQ
   - 创单实施
+  - 自增 ID
+  - IdGenerator
 acl:
   allow:
     - "$authenticated"

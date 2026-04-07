@@ -77,9 +77,8 @@ def _extract_primary_domains(documents: list[Document], fallback_source_files: l
 def _should_expand_related_domains(documents: list[Document]) -> bool:
     for doc in documents:
         domain = str(doc.metadata.get("domain", "")).strip()
-        doc_type = str(doc.metadata.get("type", "")).strip().lower()
         related_domains = _coerce_metadata_list(doc.metadata.get("related_domains"))
-        if domain == "global" and doc_type != "catalog" and len(related_domains) > 1:
+        if domain == "global" and len(related_domains) > 1:
             return True
     return False
 
@@ -217,7 +216,6 @@ def _is_sql_query_candidate(query: str) -> bool:
         "from",
         "where",
         "table",
-        "数据库",
         "数据库字段",
         "表",
         "字段",
@@ -358,6 +356,10 @@ def run_retrieval_pipeline(query: str, username: str, domains: list[str] | None 
     requested_execution_mode = str(retrieval_plan.get("execution_mode", "hybrid")).strip() or "hybrid"
     supported_execution_modes = {"hybrid", "faq_lookup", "sql_query"}
     resolved_execution_mode = requested_execution_mode if requested_execution_mode in supported_execution_modes else "hybrid"
+    
+    if resolved_execution_mode == "hybrid" and _is_sql_query_candidate(normalized_query):
+        resolved_execution_mode = "sql_query"
+
     requested_scope_source_files = _resolve_source_files_for_scope([], normalized_requested_domains) if normalized_requested_domains else _list_all_source_files()
     has_candidate_documents = bool(requested_scope_source_files)
     filter_value = build_source_file_filter(requested_scope_source_files) if requested_scope_source_files else None

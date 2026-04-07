@@ -1,3 +1,40 @@
+## domain / keywords / related_domains 如何映射到域推断
+
+这张图把 `module-directory.yaml` 里的配置、别名展开、相关域推断串成一条链路。现在系统不再依赖手写的 `DOMAIN_ALIAS_MAP`，而是从目录配置里的 `domain`、`keywords` 和 `files[].keywords` 生成可匹配别名，再用于 `related_domains` 推断。
+
+```mermaid
+flowchart TD
+    A["module-directory.yaml"] --> B["modules domain"]
+    A --> C["modules keywords"]
+    A --> D["files keywords"]
+
+    B --> E[_build_domain_alias_map]
+    C --> E
+    D --> E
+    E --> F["domain -> aliases"]
+
+    F --> G[_extract_related_domains]
+    G --> H{yaml_metadata.related_domains 是否显式存在?}
+    H -->|是| I[直接使用显式 related_domains]
+    H -->|否| J[对 source_file + text_content 做别名匹配]
+
+    J --> K[计算 domain_scores]
+    K --> L[当前 current_domain 兜底 score = 1]
+    L --> M[按分数排序并去重]
+    M --> N[global 返回 top 3]
+    M --> O[其他 domain 返回 top 2]
+
+    I --> P[写回 parent_metadata.related_domains]
+    N --> P
+    O --> P
+```
+
+关键关系可以直接理解成三层：
+
+- `domain` 是标准域名，是最终归属的主键。
+- `keywords` 和 `files[].keywords` 是这个域的别名池，会被展开成可匹配字符串。
+- `related_domains` 是推断结果或显式配置，最终写入父文档元数据，供阶段一父文档召回和跨域扩展使用。
+
 ## 阶段一 / 阶段二检索流程
 
 下面这张图概括了当前后端的两阶段处理方式：先用 LLM 给出的 `domains` 作为初始检索范围，再经过阶段一父文档召回，生成 `routed_domains`、`expanded_routed_domains` 和最终 `narrowed_domains`，最后在 effective domain list 上做 ACL 过滤并进入阶段二子切片检索。
@@ -54,19 +91,17 @@ flowchart TD
     A[阶段一父文档命中 parent_results] --> B[逐个检查父文档元数据]
     B --> C{domain == global?}
     C -->|否| D[不触发跨域扩展]
-    C -->|是| E{type != catalog?}
+    C -->|是| E{related_domains 数量 > 1?}
     E -->|否| D
-    E -->|是| F{related_domains 数量 > 1?}
-    F -->|否| D
-    F -->|是| G[满足跨域扩展条件]
+    E -->|是| F[满足跨域扩展条件]
 
-    G --> H[narrowed_domains = expanded_routed_domains]
-    D --> I[narrowed_domains = primary_domains]
-    H --> J[进入阶段二子切片检索]
-    I --> J
+    F --> G[narrowed_domains = expanded_routed_domains]
+    D --> H[narrowed_domains = primary_domains]
+    G --> I[进入阶段二子切片检索]
+    H --> I
 ```
 
-核心规则只有一条：命中的父文档必须是 `global` 域、`type` 不是 `catalog`，并且它的 `related_domains` 至少包含两个域，才会触发跨域扩展。
+核心规则只有一条：命中的父文档必须是 `global` 域，并且它的 `related_domains` 至少包含两个域，才会触发跨域扩展。
 
 ## query_type 如何影响动态路由
 

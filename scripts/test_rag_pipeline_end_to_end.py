@@ -217,8 +217,8 @@ def _build_readme_case_catalog() -> list[GeneratedCase]:
 			expected_source_files=["order-center/howto-create.md", "order-center/faq.md"],
 			expected_retrieved_context=[
 				_expected_chunk(
-					"order-center/howto-create.md",
-					"## 1. 生成唯一订单号\n调用基础设施层的分布式 ID 生成服务 `IdGenerator.nextSnowflakeId()` 获取一个 64 位的订单号。绝对不要使用数据库自增 ID 以防泄露商业数据。",
+					"order-center/faq.md",
+					"[FAQ: true] [类型: faq] 【用户常问】：后端创建订单时为什么不能用数据库自增 ID？ 【标准解答】： 绝对不能使用数据库自增 ID，以防泄露商业数据量法则。必须调用分布式 ID 生成服务 `IdGenerator.nextSnowflakeId()` 获取雪花算法订单号。",
 				),
 			],
 			note="README 测试问 5。",
@@ -378,11 +378,15 @@ def _build_case_catalog() -> list[GeneratedCase]:
 					query="后端创建订单时为什么不能用数据库自增 ID？延迟 MQ 要发多久？",
 					domains=["order-center"],
 					expected_keywords=["IdGenerator.nextSnowflakeId", "自增 ID", "RocketMQ", "15 分钟", "INIT"],
-					expected_source_files=[source_file],
+					expected_source_files=["order-center/faq.md"],
 					expected_retrieved_context=[
 						_expected_chunk(
-							source_file,
-							"## 1. 生成唯一订单号\n调用基础设施层的分布式 ID 生成服务 `IdGenerator.nextSnowflakeId()` 获取一个 64 位的订单号。绝对不要使用数据库自增 ID 以防泄露商业数据。\n\n## 3. 执行本地事务落库\n开启数据库事务 `@Transactional`，向 `t_order` 表插入一条记录。此时 `order_status` 必须硬编码设置为 `INIT`。\n\n## 4. 发送延迟 MQ 消息\n事务提交成功后，必须向 RocketMQ 的 `order_delay_topic` 发送一条延迟 15 分钟的消息。该消息用于触发“超时未支付自动取消”的死信检查逻辑。",
+							"order-center/faq.md",
+							"[FAQ: true] [类型: faq] 【用户常问】：后端创建订单时为什么不能用数据库自增 ID？ 【标准解答】： 绝对不能使用数据库自增 ID，以防泄露商业数据量法则。必须调用分布式 ID 生成服务 `IdGenerator.nextSnowflakeId()` 获取雪花算法订单号。",
+						),
+						_expected_chunk(
+							"order-center/faq.md",
+							"[FAQ: true] [类型: faq] 【用户常问】：提交订单后的延迟 MQ 要发多久的消息？用来做什么的？ 【标准解答】： 必须向 RocketMQ 发送一条延迟 15 分钟的 MQ 消息。该消息用于触发处于 `INIT` 状态订单的“超时未支付自动取消”死信检查逻辑，以释放底层库存。",
 						),
 					],
 					note="从订单落库实施指南自动生成。",
@@ -477,7 +481,7 @@ def _build_case_catalog() -> list[GeneratedCase]:
 					expected_retrieved_context=[
 						_expected_chunk(
 							source_file,
-							"* **三个核心痛点（Bullet Points）：** 1. **大杂烩文档（Garbage In）：** 架构说明、API 字典、操作步骤混在一起，切片后语义支离破碎。 2. **跨模块幻觉（Cross-module Hallucination）：** 向量检索无法区分相似概念，AI 容易精神分裂。 3. **检索结果不可解释（Black-box Retrieval）：** 没有可靠的证据链，开发者不知道答案是怎么来的。",
+							"* **三个核心痛点（Bullet Points）：** 1. **大杂烩文档（Garbage In）：** 架构说明、API 字典、操作步骤混在一起，切片后语义支离破碎。 2. **跨模块幻觉（Cross-module Hallucination）：** 向量检索无法区分相似概念，AI 容易精神分裂。 3. **数据越权风险（Security Risk）：** 人员可能随便获取未授权内容。",
 						),
 					],
 					note="从 RAG 演示稿自动生成。",

@@ -148,6 +148,7 @@ def rank_results_for_generation(query: str, results: list[Document]) -> list[Doc
     return [doc for _, doc in sorted(
         enumerate(results),
         key=lambda item: (
+            score_faq_match(query, item[1].metadata) > 5,
             _coerce_float(item[1].metadata.get("reranker_score")),
             score_faq_match(query, item[1].metadata),
             -item[0],
