@@ -95,6 +95,8 @@ def _build_runtime_health() -> dict[str, object]:
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # 文档知识库目录
 DOCS_DIR = PROJECT_ROOT / "docs"
+# 默认知识库名称
+DEFAULT_KNOWLEDGE_BASE = os.getenv("DEFAULT_KNOWLEDGE_BASE", "shop").strip() or "shop"
 # 用户与权限组映射配置文件
 USERNAME_GROUP_MAPPING_FILE = Path(__file__).resolve().parent / "username_group_mapping.json"
 
@@ -182,6 +184,7 @@ def get_runtime_config() -> dict[str, object]:
 		"paths": {
 			"project_root": str(PROJECT_ROOT),
 			"docs_dir": str(DOCS_DIR),
+			"default_knowledge_base": DEFAULT_KNOWLEDGE_BASE,
 			"username_group_mapping_file": str(USERNAME_GROUP_MAPPING_FILE),
 			"dashboard_dir": str(DASHBOARD_DIR),
 			"dashboard_index": str(DASHBOARD_INDEX),

@@ -44,6 +44,7 @@ def _build_index_body(use_ik_analyzer: bool) -> dict[str, Any]:
             "dynamic": "strict",
             "properties": {
                 "chunk_id": {"type": "keyword"},
+                "knowledge_base": {"type": "keyword"},
                 "source_file": {"type": "keyword"},
                 "domain": {"type": "keyword"},
                 "type": {"type": "keyword"},
@@ -256,6 +257,7 @@ def _build_es_source(doc: Document) -> tuple[str, dict[str, Any]]:
 
     source = _drop_empty_fields({
         "chunk_id": chunk_id,
+        "knowledge_base": _coerce_text(metadata.get("knowledge_base")),
         "source_file": _coerce_text(metadata.get("source_file")),
         "domain": _coerce_text(metadata.get("domain")),
         "type": _coerce_text(metadata.get("type")),
@@ -448,7 +450,7 @@ def search_bm25_documents(
     return documents
 
 
-def get_es_runtime_config() -> dict[str, Any]:
+def get_es_runtime_config(index_names: list[str] | None = None) -> dict[str, Any]:
     runtime: dict[str, Any] = {
         "enabled": ES_ENABLED,
         "configured": ES_ENABLED_CONFIGURED,
@@ -477,7 +479,9 @@ def get_es_runtime_config() -> dict[str, Any]:
     analyzer_modes_by_index: dict[str, str] = {}
     index_exists_by_name: dict[str, bool] = {}
 
-    for index_name in (ES_INDEX_NAME, ES_PARENT_INDEX_NAME):
+    resolved_index_names = index_names or [ES_INDEX_NAME, ES_PARENT_INDEX_NAME]
+
+    for index_name in resolved_index_names:
         exists = bool(client.indices.exists(index=index_name))
         index_exists_by_name[index_name] = exists
         if not exists:

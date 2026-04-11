@@ -16,12 +16,18 @@
           }
         ],
         "url": {
-          "raw": "{{protocol}}://{{host}}:{{port}}/ingest",
+          "raw": "{{protocol}}://{{host}}:{{port}}/ingest?knowledge_base={{knowledge_base}}",
           "protocol": "{{protocol}}",
           "host": [
             "{{host}}"
           ],
           "port": "{{port}}",
+          "query": [
+            {
+              "key": "knowledge_base",
+              "value": "{{knowledge_base}}"
+            }
+          ],
           "path": [
             "ingest"
           ]
@@ -39,12 +45,18 @@
           }
         ],
         "url": {
-          "raw": "{{protocol}}://{{host}}:{{port}}/clear",
+          "raw": "{{protocol}}://{{host}}:{{port}}/clear?knowledge_base={{knowledge_base}}",
           "protocol": "{{protocol}}",
           "host": [
             "{{host}}"
           ],
           "port": "{{port}}",
+          "query": [
+            {
+              "key": "knowledge_base",
+              "value": "{{knowledge_base}}"
+            }
+          ],
           "path": [
             "clear"
           ]
@@ -62,12 +74,18 @@
           }
         ],
         "url": {
-          "raw": "{{protocol}}://{{host}}:{{port}}/rebuild",
+          "raw": "{{protocol}}://{{host}}:{{port}}/rebuild?knowledge_base={{knowledge_base}}",
           "protocol": "{{protocol}}",
           "host": [
             "{{host}}"
           ],
           "port": "{{port}}",
+          "query": [
+            {
+              "key": "knowledge_base",
+              "value": "{{knowledge_base}}"
+            }
+          ],
           "path": [
             "rebuild"
           ]
@@ -85,12 +103,18 @@
           }
         ],
         "url": {
-          "raw": "{{protocol}}://{{host}}:{{port}}/chunks/stats",
+          "raw": "{{protocol}}://{{host}}:{{port}}/chunks/stats?knowledge_base={{knowledge_base}}",
           "protocol": "{{protocol}}",
           "host": [
             "{{host}}"
           ],
           "port": "{{port}}",
+          "query": [
+            {
+              "key": "knowledge_base",
+              "value": "{{knowledge_base}}"
+            }
+          ],
           "path": [
             "chunks",
             "stats"
@@ -109,12 +133,18 @@
           }
         ],
         "url": {
-          "raw": "{{protocol}}://{{host}}:{{port}}/docs/module-directory",
+          "raw": "{{protocol}}://{{host}}:{{port}}/docs/module-directory?knowledge_base={{knowledge_base}}",
           "protocol": "{{protocol}}",
           "host": [
             "{{host}}"
           ],
           "port": "{{port}}",
+          "query": [
+            {
+              "key": "knowledge_base",
+              "value": "{{knowledge_base}}"
+            }
+          ],
           "path": [
             "docs",
             "module-directory"
@@ -134,7 +164,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"query\": \"订单创建后怎么查询发货物流状态？\",\n  \"domains\": [\"order-center\"]\n}"
+          "raw": "{\n  \"query\": \"订单创建后怎么查询发货物流状态？\",\n  \"domains\": [\"order-center\"],\n  \"knowledge_base\": \"{{knowledge_base}}\"\n}"
         },
         "url": {
           "raw": "{{protocol}}://{{host}}:{{port}}/retrieve",
@@ -161,7 +191,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"query\": \"订单处于什么状态的时候，才允许被取消？\",\n  \"domains\": [\"order-center\"]\n}"
+          "raw": "{\n  \"query\": \"订单处于什么状态的时候，才允许被取消？\",\n  \"domains\": [\"order-center\"],\n  \"knowledge_base\": \"{{knowledge_base}}\"\n}"
         },
         "url": {
           "raw": "{{protocol}}://{{host}}:{{port}}/retrieve",
@@ -188,7 +218,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"query\": \"用户登录失败，怎么排查权限问题？\",\n  \"domains\": [\"user-center\"]\n}"
+          "raw": "{\n  \"query\": \"用户登录失败，怎么排查权限问题？\",\n  \"domains\": [\"user-center\"],\n  \"knowledge_base\": \"{{knowledge_base}}\"\n}"
         },
         "url": {
           "raw": "{{protocol}}://{{host}}:{{port}}/retrieve",
@@ -215,7 +245,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"query\": \"前端调登录接口的时候，需要传哪些参数？如果密码输错了会返回什么错误码？\",\n  \"domains\": [\"user-center\"]\n}"
+          "raw": "{\n  \"query\": \"前端调登录接口的时候，需要传哪些参数？如果密码输错了会返回什么错误码？\",\n  \"domains\": [\"user-center\"],\n  \"knowledge_base\": \"{{knowledge_base}}\"\n}"
         },
         "url": {
           "raw": "{{protocol}}://{{host}}:{{port}}/retrieve",
@@ -242,7 +272,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"query\": \"订单表里的金额字段叫什么？它的数据类型和单位是什么？\",\n  \"domains\": [\"order-center\"]\n}"
+          "raw": "{\n  \"query\": \"订单表里的金额字段叫什么？它的数据类型和单位是什么？\",\n  \"domains\": [\"order-center\"],\n  \"knowledge_base\": \"{{knowledge_base}}\"\n}"
         },
         "url": {
           "raw": "{{protocol}}://{{host}}:{{port}}/retrieve",
@@ -269,7 +299,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"query\": \"为什么我们系统要搞 Access Token 和 Refresh Token 两个 Token？只用一个不行吗？\",\n  \"domains\": [\"user-center\"]\n}"
+          "raw": "{\n  \"query\": \"为什么我们系统要搞 Access Token 和 Refresh Token 两个 Token？只用一个不行吗？\",\n  \"domains\": [\"user-center\"],\n  \"knowledge_base\": \"{{knowledge_base}}\"\n}"
         },
         "url": {
           "raw": "{{protocol}}://{{host}}:{{port}}/retrieve",
@@ -296,7 +326,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"query\": \"后端在写创建订单接口的时候，订单号可以直接用数据库的自增 ID 吗？为什么？\",\n  \"domains\": [\"order-center\"]\n}"
+          "raw": "{\n  \"query\": \"后端在写创建订单接口的时候，订单号可以直接用数据库的自增 ID 吗？为什么？\",\n  \"domains\": [\"order-center\"],\n  \"knowledge_base\": \"{{knowledge_base}}\"\n}"
         },
         "url": {
           "raw": "{{protocol}}://{{host}}:{{port}}/retrieve",
@@ -323,7 +353,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"query\": \"如果用户下单了但一直不付款，这笔订单会怎么处理？会不会一直占着库存？\",\n  \"domains\": [\"order-center\"]\n}"
+          "raw": "{\n  \"query\": \"如果用户下单了但一直不付款，这笔订单会怎么处理？会不会一直占着库存？\",\n  \"domains\": [\"order-center\"],\n  \"knowledge_base\": \"{{knowledge_base}}\"\n}"
         },
         "url": {
           "raw": "{{protocol}}://{{host}}:{{port}}/retrieve",
@@ -350,7 +380,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"query\": \"如何配置系统的工作流说明？\",\n  \"domains\": []\n}"
+          "raw": "{\n  \"query\": \"如何配置系统的工作流说明？\",\n  \"domains\": [],\n  \"knowledge_base\": \"{{knowledge_base}}\"\n}"
         },
         "url": {
           "raw": "{{protocol}}://{{host}}:{{port}}/retrieve",
@@ -377,7 +407,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"query\": \"当用户在 App 里面点击提交订单后，到最终支付成功，这中间的系统调用链路是怎样的？状态是怎么变的？\",\n  \"domains\": [\"global\", \"order-center\"]\n}"
+          "raw": "{\n  \"query\": \"当用户在 App 里面点击提交订单后，到最终支付成功，这中间的系统调用链路是怎样的？状态是怎么变的？\",\n  \"domains\": [\"global\", \"order-center\"],\n  \"knowledge_base\": \"{{knowledge_base}}\"\n}"
         },
         "url": {
           "raw": "{{protocol}}://{{host}}:{{port}}/retrieve",
@@ -404,7 +434,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"query\": \"如果前端请求下单接口的时候，报了 401 错误，前端应该怎么做？需要让用户重新输入账号密码吗？\",\n  \"domains\": [\"user-center\", \"order-center\"]\n}"
+          "raw": "{\n  \"query\": \"如果前端请求下单接口的时候，报了 401 错误，前端应该怎么做？需要让用户重新输入账号密码吗？\",\n  \"domains\": [\"user-center\", \"order-center\"],\n  \"knowledge_base\": \"{{knowledge_base}}\"\n}"
         },
         "url": {
           "raw": "{{protocol}}://{{host}}:{{port}}/retrieve",
@@ -431,7 +461,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"query\": \"登录接口里面，email 字段是必填的吗？\",\n  \"domains\": [\"user-center\"]\n}"
+          "raw": "{\n  \"query\": \"登录接口里面，email 字段是必填的吗？\",\n  \"domains\": [\"user-center\"],\n  \"knowledge_base\": \"{{knowledge_base}}\"\n}"
         },
         "url": {
           "raw": "{{protocol}}://{{host}}:{{port}}/retrieve",
@@ -458,7 +488,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"query\": \"商家发货后，怎么对接顺丰快递的 API 获取物流单号？\",\n  \"domains\": [\"order-center\"]\n}"
+          "raw": "{\n  \"query\": \"商家发货后，怎么对接顺丰快递的 API 获取物流单号？\",\n  \"domains\": [\"order-center\"],\n  \"knowledge_base\": \"{{knowledge_base}}\"\n}"
         },
         "url": {
           "raw": "{{protocol}}://{{host}}:{{port}}/retrieve",

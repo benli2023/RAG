@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import os
+from functools import lru_cache
 
 from langchain_chroma import Chroma
 from langchain_core.embeddings import Embeddings
 from langchain_huggingface import HuggingFaceEmbeddings
 
-from rag_config import DB_DIR, LOCAL_MODEL_PATH
+from knowledge_base_service import get_child_collection_name, get_parent_collection_name, normalize_knowledge_base_name
+from rag_config import DB_DIR, DEFAULT_KNOWLEDGE_BASE, LOCAL_MODEL_PATH
 
 
 def _parse_bool(value: object, default: bool) -> bool:
@@ -94,9 +96,26 @@ class LazyEmbeddingFunction(Embeddings):
 
 embedding_function = LazyEmbeddingFunction()
 
-vectorstore = Chroma(embedding_function=embedding_function, persist_directory=DB_DIR)
-parent_vectorstore = Chroma(
-    collection_name="parent_documents",
-    embedding_function=embedding_function,
-    persist_directory=DB_DIR,
-)
+
+@lru_cache(maxsize=32)
+def get_vectorstore(knowledge_base: str):
+    normalized_name = normalize_knowledge_base_name(knowledge_base)
+    return Chroma(
+        collection_name=get_child_collection_name(normalized_name),
+        embedding_function=embedding_function,
+        persist_directory=DB_DIR,
+    )
+
+
+@lru_cache(maxsize=32)
+def get_parent_vectorstore(knowledge_base: str):
+    normalized_name = normalize_knowledge_base_name(knowledge_base)
+    return Chroma(
+        collection_name=get_parent_collection_name(normalized_name),
+        embedding_function=embedding_function,
+        persist_directory=DB_DIR,
+    )
+
+
+vectorstore = get_vectorstore(DEFAULT_KNOWLEDGE_BASE)
+parent_vectorstore = get_parent_vectorstore(DEFAULT_KNOWLEDGE_BASE)

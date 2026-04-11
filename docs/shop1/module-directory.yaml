@@ -1,0 +1,11 @@
+modules:
+  - domain: user-center
+    summary: 最小 shop1 知识库样例，只保留用户登录接口参考文档，用于验证多知识库隔离。
+    files:
+      - name: user-center/reference-api.md
+        summary: 用户中心登录接口参考手册的最小样例。
+        sections:
+          - title: POST /api/v1/user/login 账号密码登录接口
+          - title: Request Body 请求参数
+          - title: Response Data 响应参数
+          - title: 业务错误码字典

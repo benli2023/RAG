@@ -11,15 +11,14 @@ from access_control import ANONYMOUS_USERNAME
 from api_models import QueryRequest, SourceFileRequest
 from documents_service import assert_document_access, build_index_documents, list_docs_markdown_files, normalize_docs_relative_path
 from es_service import clear_es_index, delete_by_source_file_in_es, get_es_runtime_config, upsert_chunks_to_es
-from rag_config import DASHBOARD_DIR, DASHBOARD_INDEX, DOCS_DIR, ENABLE_ACL, ENABLE_PARENT_CHILD_RETRIEVAL, ENABLE_SUB_CHUNKING, ES_INDEX_NAME, ES_PARENT_INDEX_NAME, get_runtime_config
-from rag_store import embedding_function, parent_vectorstore, vectorstore
+from knowledge_base_service import get_child_es_index_name, get_knowledge_base_dir, get_module_directory_file, get_parent_es_index_name, list_knowledge_bases, normalize_knowledge_base_name
+from rag_config import DASHBOARD_DIR, DASHBOARD_INDEX, DEFAULT_KNOWLEDGE_BASE, ENABLE_ACL, ENABLE_PARENT_CHILD_RETRIEVAL, ENABLE_SUB_CHUNKING, get_runtime_config
+from rag_store import embedding_function, get_parent_vectorstore, get_vectorstore
 from retrieval_pipeline_service import run_retrieval_pipeline
 from retrieval_strategy_config import get_routing_runtime_config, normalize_query_type
 from vectorstore_service import clear_vectorstore, delete_by_source_file, get_chunk_statistics, get_grouped_source_files_from_vectorstore, upsert_chunks
 
 app = FastAPI()
-
-MODULE_DIRECTORY_FILE = DOCS_DIR / "module-directory.yaml"
 
 if DASHBOARD_DIR.exists():
     app.mount("/static-dashboard", StaticFiles(directory=str(DASHBOARD_DIR)), name="static-dashboard")
@@ -55,22 +54,54 @@ def _finish_progress() -> None:
     sys.stdout.flush()
 
 
-def get_module_directory_response() -> dict:
-    if not MODULE_DIRECTORY_FILE.is_file():
-        raise FileNotFoundError(f"module directory file not found: {MODULE_DIRECTORY_FILE}")
+def _resolve_knowledge_base_runtime(knowledge_base: str | None) -> dict[str, object]:
+    normalized_name = normalize_knowledge_base_name(knowledge_base)
+    docs_dir = get_knowledge_base_dir(normalized_name)
+    return {
+        "knowledge_base": normalized_name,
+        "docs_dir": docs_dir,
+        "module_directory_file": get_module_directory_file(normalized_name),
+        "vectorstore": get_vectorstore(normalized_name),
+        "parent_vectorstore": get_parent_vectorstore(normalized_name),
+        "es_index_name": get_child_es_index_name(normalized_name),
+        "es_parent_index_name": get_parent_es_index_name(normalized_name),
+    }
 
-    with open(MODULE_DIRECTORY_FILE, "r", encoding="utf-8") as file_handle:
+
+def get_module_directory_response(knowledge_base: str | None = None) -> dict:
+    runtime = _resolve_knowledge_base_runtime(knowledge_base)
+    module_directory_file = runtime["module_directory_file"]
+    if not isinstance(module_directory_file, Path) or not module_directory_file.is_file():
+        raise FileNotFoundError(f"module directory file not found: {module_directory_file}")
+
+    with open(module_directory_file, "r", encoding="utf-8") as file_handle:
         payload = yaml.safe_load(file_handle)
 
-    return payload if isinstance(payload, dict) else {"modules": []}
+    response_payload = payload if isinstance(payload, dict) else {"modules": []}
+    response_payload["knowledge_base"] = runtime["knowledge_base"]
+    return response_payload
 
 # ================= 3. 核心业务字典：意图路由配置 =================
 
+
+@app.get("/knowledge-bases")
+def list_available_knowledge_bases():
+    return {
+        "default_knowledge_base": DEFAULT_KNOWLEDGE_BASE,
+        "knowledge_bases": list_knowledge_bases(),
+    }
+
 # ================= 4. [入库 API] 带元数据解析的自定义切片 =================
 @app.post("/ingest")
-def ingest_docs():
-    docs_dir = DOCS_DIR
-    md_files = list_docs_markdown_files()
+def ingest_docs(knowledge_base: str = DEFAULT_KNOWLEDGE_BASE):
+    runtime = _resolve_knowledge_base_runtime(knowledge_base)
+    normalized_name = str(runtime["knowledge_base"])
+    docs_dir = runtime["docs_dir"]
+    parent_vectorstore = runtime["parent_vectorstore"]
+    vectorstore = runtime["vectorstore"]
+    es_parent_index_name = str(runtime["es_parent_index_name"])
+    es_index_name = str(runtime["es_index_name"])
+    md_files = list_docs_markdown_files(docs_dir)
 
     parent_docs = []
     final_chunks = []
@@ -91,13 +122,17 @@ def ingest_docs():
 
     # 存入数据库
     if not final_chunks and not parent_docs:
-        return {"message": f"未找到可入库的 Markdown 内容，共扫描 {len(md_files)} 个文件。"}
+        return {
+            "knowledge_base": normalized_name,
+            "message": f"未找到可入库的 Markdown 内容，共扫描 {len(md_files)} 个文件。",
+        }
     parent_upsert_result = upsert_chunks(parent_docs, embedding_function, parent_vectorstore)
     upsert_result = upsert_chunks(final_chunks, embedding_function, vectorstore)
-    parent_es_upsert_result = upsert_chunks_to_es(parent_docs, index_name=ES_PARENT_INDEX_NAME)
-    child_es_upsert_result = upsert_chunks_to_es(final_chunks, index_name=ES_INDEX_NAME)
+    parent_es_upsert_result = upsert_chunks_to_es(parent_docs, index_name=es_parent_index_name)
+    child_es_upsert_result = upsert_chunks_to_es(final_chunks, index_name=es_index_name)
     es_sync_message = "并已同步检索索引。" if parent_es_upsert_result["enabled"] and child_es_upsert_result["enabled"] else "，但未启用 ES BM25，同步已跳过。"
     return {
+        "knowledge_base": normalized_name,
         "message": f"成功处理 {len(md_files)} 个文件，生成 {len(parent_docs)} 个父文档摘要和 {len(final_chunks)} 个子切片{es_sync_message}",
         "parent_child_retrieval_enabled": ENABLE_PARENT_CHILD_RETRIEVAL,
         "sub_chunking_enabled": ENABLE_SUB_CHUNKING,
@@ -118,12 +153,19 @@ def ingest_docs():
 
 
 @app.post("/clear")
-def clear_index():
+def clear_index(knowledge_base: str = DEFAULT_KNOWLEDGE_BASE):
+    runtime = _resolve_knowledge_base_runtime(knowledge_base)
+    normalized_name = str(runtime["knowledge_base"])
+    parent_vectorstore = runtime["parent_vectorstore"]
+    vectorstore = runtime["vectorstore"]
+    es_parent_index_name = str(runtime["es_parent_index_name"])
+    es_index_name = str(runtime["es_index_name"])
     deleted_parent_count = clear_vectorstore(parent_vectorstore)
     deleted_vector_count = clear_vectorstore(vectorstore)
-    deleted_parent_es_count = clear_es_index(index_name=ES_PARENT_INDEX_NAME, recreate=True)
-    deleted_es_count = clear_es_index(index_name=ES_INDEX_NAME, recreate=True)
+    deleted_parent_es_count = clear_es_index(index_name=es_parent_index_name, recreate=True)
+    deleted_es_count = clear_es_index(index_name=es_index_name, recreate=True)
     return {
+        "knowledge_base": normalized_name,
         "message": f"已清空检索索引，父文档索引删除 {deleted_parent_count} 条，子切片向量库删除 {deleted_vector_count} 条，父 BM25 索引删除 {deleted_parent_es_count} 条，子 BM25 索引删除 {deleted_es_count} 条。",
         "deleted_count": deleted_vector_count,
         "deleted_parent_count": deleted_parent_count,
@@ -134,13 +176,20 @@ def clear_index():
 
 
 @app.post("/rebuild")
-def rebuild_index():
+def rebuild_index(knowledge_base: str = DEFAULT_KNOWLEDGE_BASE):
+    runtime = _resolve_knowledge_base_runtime(knowledge_base)
+    normalized_name = str(runtime["knowledge_base"])
+    parent_vectorstore = runtime["parent_vectorstore"]
+    vectorstore = runtime["vectorstore"]
+    es_parent_index_name = str(runtime["es_parent_index_name"])
+    es_index_name = str(runtime["es_index_name"])
     deleted_parent_count = clear_vectorstore(parent_vectorstore)
     deleted_vector_count = clear_vectorstore(vectorstore)
-    deleted_parent_es_count = clear_es_index(index_name=ES_PARENT_INDEX_NAME, recreate=True)
-    deleted_es_count = clear_es_index(index_name=ES_INDEX_NAME, recreate=True)
-    ingest_result = ingest_docs()
+    deleted_parent_es_count = clear_es_index(index_name=es_parent_index_name, recreate=True)
+    deleted_es_count = clear_es_index(index_name=es_index_name, recreate=True)
+    ingest_result = ingest_docs(knowledge_base=normalized_name)
     return {
+        "knowledge_base": normalized_name,
         "message": "索引已重建完成。",
         "deleted_count": deleted_vector_count,
         "deleted_parent_count": deleted_parent_count,
@@ -152,15 +201,31 @@ def rebuild_index():
 
 
 @app.get("/chunks/stats")
-def get_chunk_stats():
-    return get_chunk_statistics(vectorstore)
+def get_chunk_stats(knowledge_base: str = DEFAULT_KNOWLEDGE_BASE):
+    runtime = _resolve_knowledge_base_runtime(knowledge_base)
+    payload = get_chunk_statistics(runtime["vectorstore"])
+    payload["knowledge_base"] = runtime["knowledge_base"]
+    return payload
 
 
 @app.get("/config")
-def get_config():
+def get_config(knowledge_base: str = DEFAULT_KNOWLEDGE_BASE):
+    runtime = _resolve_knowledge_base_runtime(knowledge_base)
     runtime_config = get_runtime_config()
     runtime_config["routing"] = get_routing_runtime_config()
-    runtime_config["indexing"]["es_runtime"] = get_es_runtime_config()
+    runtime_config["knowledge_base"] = {
+        "selected": runtime["knowledge_base"],
+        "default": DEFAULT_KNOWLEDGE_BASE,
+        "available": list_knowledge_bases(),
+        "docs_dir": str(runtime["docs_dir"]),
+        "module_directory_file": str(runtime["module_directory_file"]),
+    }
+    runtime_config["indexing"]["child_es_index_name"] = runtime["es_index_name"]
+    runtime_config["indexing"]["parent_es_index_name"] = runtime["es_parent_index_name"]
+    runtime_config["indexing"]["es_runtime"] = get_es_runtime_config([
+        str(runtime["es_index_name"]),
+        str(runtime["es_parent_index_name"]),
+    ])
     return runtime_config
 
 
@@ -179,31 +244,36 @@ def get_dashboard_page():
 
 
 @app.get("/docs/content/{path:path}")
-def get_document_content(path: str, username: str = ANONYMOUS_USERNAME):
+def get_document_content(path: str, username: str = ANONYMOUS_USERNAME, knowledge_base: str = DEFAULT_KNOWLEDGE_BASE):
+    runtime = _resolve_knowledge_base_runtime(knowledge_base)
+    docs_dir = runtime["docs_dir"]
     try:
-        file_path = normalize_docs_relative_path(path)
+        file_path = normalize_docs_relative_path(path, docs_dir)
     except ValueError as exc:
         return {"error": str(exc)}
     except FileNotFoundError as exc:
         return {"error": str(exc)}
 
     if ENABLE_ACL:
-        assert_document_access(file_path, username)
+        assert_document_access(file_path, username, docs_dir)
 
     with open(file_path, "r", encoding="utf-8") as f:
         post = frontmatter.load(f)
 
     return {
-        "path": str(file_path.resolve().relative_to(DOCS_DIR.resolve())).replace("\\", "/"),
+        "knowledge_base": runtime["knowledge_base"],
+        "path": str(file_path.resolve().relative_to(docs_dir.resolve())).replace("\\", "/"),
         "content": post.content,
     }
 
 
 @app.get("/docs/list")
-def list_documents():
-    docs_dir = DOCS_DIR
-    md_files = list_docs_markdown_files()
+def list_documents(knowledge_base: str = DEFAULT_KNOWLEDGE_BASE):
+    runtime = _resolve_knowledge_base_runtime(knowledge_base)
+    docs_dir = runtime["docs_dir"]
+    md_files = list_docs_markdown_files(docs_dir)
     return {
+        "knowledge_base": runtime["knowledge_base"],
         "documents": [
             str(file_path.resolve().relative_to(docs_dir.resolve())).replace("\\", "/")
             for file_path in md_files
@@ -212,27 +282,31 @@ def list_documents():
 
 
 @app.get("/docs/module-directory")
-def get_module_directory():
+def get_module_directory(knowledge_base: str = DEFAULT_KNOWLEDGE_BASE):
     try:
-        return get_module_directory_response()
+        return get_module_directory_response(knowledge_base)
     except FileNotFoundError as exc:
         return {"error": str(exc)}
 
 
 @app.get("/docs/grouped")
-def list_grouped_documents_from_vectorstore():
+def list_grouped_documents_from_vectorstore(knowledge_base: str = DEFAULT_KNOWLEDGE_BASE):
+    runtime = _resolve_knowledge_base_runtime(knowledge_base)
     return {
-        "modules": get_grouped_source_files_from_vectorstore(vectorstore)
+        "knowledge_base": runtime["knowledge_base"],
+        "modules": get_grouped_source_files_from_vectorstore(runtime["vectorstore"])
     }
 
 
 @app.post("/docs/delete")
 def delete_document_chunks(req: SourceFileRequest):
-    deleted_parent_count = delete_by_source_file(req.source_file, parent_vectorstore)
-    deleted_vector_count = delete_by_source_file(req.source_file, vectorstore)
-    deleted_parent_es_count = delete_by_source_file_in_es(req.source_file, index_name=ES_PARENT_INDEX_NAME)
-    deleted_es_count = delete_by_source_file_in_es(req.source_file, index_name=ES_INDEX_NAME)
+    runtime = _resolve_knowledge_base_runtime(req.knowledge_base)
+    deleted_parent_count = delete_by_source_file(req.source_file, runtime["parent_vectorstore"])
+    deleted_vector_count = delete_by_source_file(req.source_file, runtime["vectorstore"])
+    deleted_parent_es_count = delete_by_source_file_in_es(req.source_file, index_name=str(runtime["es_parent_index_name"]))
+    deleted_es_count = delete_by_source_file_in_es(req.source_file, index_name=str(runtime["es_index_name"]))
     return {
+        "knowledge_base": runtime["knowledge_base"],
         "message": f"已删除 source_file={req.source_file} 的父子索引记录。",
         "source_file": req.source_file,
         "deleted_count": deleted_vector_count,
@@ -245,22 +319,28 @@ def delete_document_chunks(req: SourceFileRequest):
 
 @app.post("/docs/update")
 def update_document_chunks(req: SourceFileRequest):
-    docs_dir = DOCS_DIR
-    file_path = normalize_docs_relative_path(req.source_file)
+    runtime = _resolve_knowledge_base_runtime(req.knowledge_base)
+    docs_dir = runtime["docs_dir"]
+    file_path = normalize_docs_relative_path(req.source_file, docs_dir)
+    parent_vectorstore = runtime["parent_vectorstore"]
+    vectorstore = runtime["vectorstore"]
+    es_parent_index_name = str(runtime["es_parent_index_name"])
+    es_index_name = str(runtime["es_index_name"])
 
     deleted_parent_count = delete_by_source_file(req.source_file, parent_vectorstore)
     deleted_vector_count = delete_by_source_file(req.source_file, vectorstore)
-    deleted_parent_es_count = delete_by_source_file_in_es(req.source_file, index_name=ES_PARENT_INDEX_NAME)
-    deleted_es_count = delete_by_source_file_in_es(req.source_file, index_name=ES_INDEX_NAME)
+    deleted_parent_es_count = delete_by_source_file_in_es(req.source_file, index_name=es_parent_index_name)
+    deleted_es_count = delete_by_source_file_in_es(req.source_file, index_name=es_index_name)
     parent_doc, chunks = build_index_documents(file_path, docs_dir)
     parent_docs = [parent_doc] if parent_doc is not None else []
     parent_upsert_result = upsert_chunks(parent_docs, embedding_function, parent_vectorstore)
     upsert_result = upsert_chunks(chunks, embedding_function, vectorstore)
-    parent_es_upsert_result = upsert_chunks_to_es(parent_docs, index_name=ES_PARENT_INDEX_NAME)
-    child_es_upsert_result = upsert_chunks_to_es(chunks, index_name=ES_INDEX_NAME)
+    parent_es_upsert_result = upsert_chunks_to_es(parent_docs, index_name=es_parent_index_name)
+    child_es_upsert_result = upsert_chunks_to_es(chunks, index_name=es_index_name)
     es_sync_message = "" if parent_es_upsert_result["enabled"] and child_es_upsert_result["enabled"] else "，但未启用 ES BM25，同步已跳过"
 
     return {
+        "knowledge_base": runtime["knowledge_base"],
         "message": f"已完成 source_file={req.source_file} 的重建更新{es_sync_message}。",
         "source_file": req.source_file,
         "deleted_count": deleted_vector_count,
@@ -292,8 +372,9 @@ def retrieve_context(req: QueryRequest):
             username=req.username,
             domains=req.domains,
             query_type=req.query_type,
+            knowledge_base=req.knowledge_base,
         )
-    except ValueError as exc:
+    except (ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return pipeline_result["response"]

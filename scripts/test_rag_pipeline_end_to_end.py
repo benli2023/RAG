@@ -27,18 +27,23 @@ def _load_backend_attr(module_name: str, attr_name: str):
 	return getattr(module, attr_name)
 
 
-DOCS_DIR = _load_backend_attr("rag_config", "DOCS_DIR")
+DEFAULT_KNOWLEDGE_BASE = _load_backend_attr("rag_config", "DEFAULT_KNOWLEDGE_BASE")
+get_knowledge_base_dir = _load_backend_attr("knowledge_base_service", "get_knowledge_base_dir")
+get_child_es_index_name = _load_backend_attr("knowledge_base_service", "get_child_es_index_name")
+get_parent_es_index_name = _load_backend_attr("knowledge_base_service", "get_parent_es_index_name")
+DOCS_DIR = get_knowledge_base_dir(DEFAULT_KNOWLEDGE_BASE)
 ES_ENABLED = _load_backend_attr("rag_config", "ES_ENABLED")
-ES_INDEX_NAME = _load_backend_attr("rag_config", "ES_INDEX_NAME")
-ES_PARENT_INDEX_NAME = _load_backend_attr("rag_config", "ES_PARENT_INDEX_NAME")
+ES_INDEX_NAME = get_child_es_index_name(DEFAULT_KNOWLEDGE_BASE)
+ES_PARENT_INDEX_NAME = get_parent_es_index_name(DEFAULT_KNOWLEDGE_BASE)
 list_docs_markdown_files = _load_backend_attr("documents_service", "list_docs_markdown_files")
 run_retrieval_pipeline = _load_backend_attr("retrieval_pipeline_service", "run_retrieval_pipeline")
-vectorstore = _load_backend_attr("rag_store", "vectorstore")
+get_vectorstore = _load_backend_attr("rag_store", "get_vectorstore")
 clear_vectorstore = _load_backend_attr("vectorstore_service", "clear_vectorstore")
 get_chunk_statistics = _load_backend_attr("vectorstore_service", "get_chunk_statistics")
 clear_es_index = _load_backend_attr("es_service", "clear_es_index")
 get_es_client = _load_backend_attr("es_service", "get_es_client")
 ingest_docs = _load_backend_attr("server", "ingest_docs")
+vectorstore = get_vectorstore(DEFAULT_KNOWLEDGE_BASE)
 
 
 @dataclass
@@ -99,7 +104,7 @@ def _relative_source_file(path: Path) -> str:
 @lru_cache(maxsize=1)
 def _source_file_domain_map() -> dict[str, str]:
 	mapping: dict[str, str] = {}
-	for path in list_docs_markdown_files():
+	for path in list_docs_markdown_files(DOCS_DIR):
 		metadata, _ = _load_doc(path)
 		mapping[_relative_source_file(path)] = str(metadata.get("domain", "unknown"))
 	return mapping
@@ -294,7 +299,7 @@ def _build_readme_case_catalog() -> list[GeneratedCase]:
 def _build_case_catalog() -> list[GeneratedCase]:
 	cases: list[GeneratedCase] = []
 
-	for path in list_docs_markdown_files():
+	for path in list_docs_markdown_files(DOCS_DIR):
 		source_file = _relative_source_file(path)
 		metadata, content = _load_doc(path)
 		combined_text = f"{source_file}\n{metadata}\n{content}"
@@ -488,7 +493,8 @@ def _build_case_catalog() -> list[GeneratedCase]:
 				),
 			)
 
-	cases.extend(_build_readme_case_catalog())
+	if DEFAULT_KNOWLEDGE_BASE == "shop":
+		cases.extend(_build_readme_case_catalog())
 	return cases
 
 
@@ -554,7 +560,7 @@ def _clear_and_rebuild_indexes() -> dict[str, Any]:
 		deleted_parent_es_count = 0
 		deleted_es_count = 0
 
-	ingest_result = ingest_docs()
+	ingest_result = ingest_docs(DEFAULT_KNOWLEDGE_BASE)
 	post_ingest_health = _collect_index_health()
 
 	return {
@@ -644,6 +650,7 @@ def _evaluate_case(case: GeneratedCase) -> dict[str, Any]:
 	pipeline_result = run_retrieval_pipeline(
 		query=case.query,
 		username=case.username,
+		knowledge_base=DEFAULT_KNOWLEDGE_BASE,
 	)
 	response = pipeline_result["response"]
 	trace = pipeline_result["trace"]
@@ -817,7 +824,7 @@ def _summarize_report(index_health_before: dict[str, Any], index_health_after: d
 		"generated_at": datetime.now().isoformat(timespec="seconds"),
 		"corpus": {
 			"docs_dir": str(DOCS_DIR),
-			"doc_count": len(list_docs_markdown_files()),
+			"doc_count": len(list_docs_markdown_files(DOCS_DIR)),
 			"generated_case_count": len(generated_cases),
 			"case_names": [case.name for case in generated_cases],
 		},

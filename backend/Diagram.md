@@ -1,6 +1,6 @@
 ## domain / keywords / related_domains 如何映射到域推断
 
-这张图把 `module-directory.yaml` 里的配置、别名展开、相关域推断串成一条链路。现在系统不再依赖手写的 `DOMAIN_ALIAS_MAP`，而是从目录配置里的 `domain` 以及可选的 `keywords`、`files[].keywords` 生成可匹配别名，再用于 `related_domains` 推断。当前 `docs/module-directory.yaml` 可以不包含这些字段；缺省时只用 `domain` 做匹配。
+这张图把 `module-directory.yaml` 里的配置、别名展开、相关域推断串成一条链路。现在系统不再依赖手写的 `DOMAIN_ALIAS_MAP`，而是从目录配置里的 `domain` 以及可选的 `keywords`、`files[].keywords` 生成可匹配别名，再用于 `related_domains` 推断。当前每个知识库都使用 `docs/<knowledge_base>/module-directory.yaml`；缺省时只用 `domain` 做匹配。
 
 ```mermaid
 flowchart TD

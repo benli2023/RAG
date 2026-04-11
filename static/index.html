@@ -259,6 +259,7 @@
           : "http";
         const initialHost = window.location.hostname || "127.0.0.1";
         const initialPort = window.location.port || "8000";
+        const initialKnowledgeBase = "shop";
 
         const theme = createTheme({
           palette: {
@@ -304,16 +305,47 @@
           return `${protocol}://${host}:${port}`;
         }
 
+        function buildApiUrl(baseUrl, path, knowledgeBase) {
+          const normalizedBaseUrl = String(baseUrl || "").replace(/\/$/, "");
+          const normalizedPath = String(path || "");
+          const finalPath = normalizedPath.startsWith("/") ? normalizedPath : `/${normalizedPath}`;
+          const url = new URL(`${normalizedBaseUrl}${finalPath}`);
+          const normalizedKnowledgeBase = String(knowledgeBase || "").trim();
+          if (normalizedKnowledgeBase) {
+            url.searchParams.set("knowledge_base", normalizedKnowledgeBase);
+          }
+          return url.toString();
+        }
+
+        function attachKnowledgeBase(body, path, knowledgeBase) {
+          if (!body || typeof body !== "object" || Array.isArray(body)) {
+            return body;
+          }
+
+          if (!["/retrieve", "/docs/delete", "/docs/update"].includes(path)) {
+            return body;
+          }
+
+          const normalizedKnowledgeBase = String(knowledgeBase || "").trim();
+          if (!normalizedKnowledgeBase) {
+            return body;
+          }
+
+          return Object.assign({}, body, { knowledge_base: normalizedKnowledgeBase });
+        }
+
         function pretty(data) {
           if (typeof data === "string") return data;
           return JSON.stringify(data, null, 2);
         }
 
         async function callApi(config) {
-          const res = await fetch(`${config.baseUrl}${config.path}`, {
+          const requestUrl = buildApiUrl(config.baseUrl, config.path, config.knowledgeBase);
+          const requestBody = attachKnowledgeBase(config.body, config.path, config.knowledgeBase);
+          const res = await fetch(requestUrl, {
             method: config.method,
             headers: { "Content-Type": "application/json" },
-            body: config.method === "GET" ? undefined : config.body ? JSON.stringify(config.body) : undefined,
+            body: config.method === "GET" ? undefined : requestBody ? JSON.stringify(requestBody) : undefined,
           });
 
           let payload;
@@ -514,6 +546,7 @@
           const [protocol, setProtocol] = React.useState(initialProtocol);
           const [host, setHost] = React.useState(initialHost);
           const [port, setPort] = React.useState(initialPort);
+          const [knowledgeBase, setKnowledgeBase] = React.useState(initialKnowledgeBase);
           const [activePage, setActivePage] = React.useState("maintenance");
           const [sourceFile, setSourceFile] = React.useState("");
           const [docOptions, setDocOptions] = React.useState([]);
@@ -548,7 +581,7 @@
 
           function runListDocuments() {
             return runAction(async function () {
-              const groupedData = await callApi({ baseUrl: baseUrl, method: "GET", path: "/docs/grouped" });
+              const groupedData = await callApi({ baseUrl: baseUrl, method: "GET", path: "/docs/grouped", knowledgeBase: knowledgeBase });
               const modules = (groupedData && groupedData.modules) || [];
               const docs = modules.flatMap(function (item) {
                 return item.source_files || [];
@@ -580,7 +613,7 @@
             setConfigBusy(true);
             setConfigError("");
             try {
-              const data = await callApi({ baseUrl: baseUrl, method: "GET", path: "/config" });
+              const data = await callApi({ baseUrl: baseUrl, method: "GET", path: "/config", knowledgeBase: knowledgeBase });
               setRuntimeConfig(data);
             } catch (runtimeError) {
               setConfigError(runtimeError.message || String(runtimeError));
@@ -591,7 +624,7 @@
 
           function runStats() {
             return runAction(function () {
-              return callApi({ baseUrl: baseUrl, method: "GET", path: "/chunks/stats" });
+              return callApi({ baseUrl: baseUrl, method: "GET", path: "/chunks/stats", knowledgeBase: knowledgeBase });
             });
           }
 
@@ -607,6 +640,7 @@
                 baseUrl: baseUrl,
                 method: "POST",
                 path: "/retrieve",
+                knowledgeBase: knowledgeBase,
                 body: {
                   query: cleanedQuery,
                 },
@@ -631,6 +665,7 @@
                 baseUrl: baseUrl,
                 method: item.method,
                 path: item.path,
+                knowledgeBase: knowledgeBase,
                 body: item.body,
               });
             });
@@ -660,6 +695,7 @@
                 baseUrl: baseUrl,
                 method: "POST",
                 path: "/docs/delete",
+                knowledgeBase: knowledgeBase,
                 body: { source_file: cleaned },
               });
             });
@@ -671,7 +707,7 @@
             }
 
             return runAction(function () {
-              return callApi({ baseUrl: baseUrl, method: "POST", path: "/rebuild" });
+              return callApi({ baseUrl: baseUrl, method: "POST", path: "/rebuild", knowledgeBase: knowledgeBase });
             });
           }
 
@@ -686,6 +722,7 @@
                 baseUrl: baseUrl,
                 method: "POST",
                 path: "/docs/update",
+                knowledgeBase: knowledgeBase,
                 body: { source_file: cleaned },
               });
             });
@@ -702,6 +739,7 @@
                 baseUrl: baseUrl,
                 method: "GET",
                 path: `/docs/content/${cleaned}`,
+                knowledgeBase: knowledgeBase,
               });
             });
           }
@@ -709,7 +747,7 @@
           React.useEffect(function () {
             runListDocuments();
             loadRuntimeConfig();
-          }, [baseUrl]);
+          }, [baseUrl, knowledgeBase]);
 
           function toggleModule(domain) {
             setExpandedModules(function (prev) {
@@ -821,7 +859,7 @@
                   )
                 ),
                 h(Chip, {
-                  label: `服务地址: ${baseUrl}`,
+                  label: `服务地址: ${baseUrl} · KB: ${knowledgeBase}`,
                   sx: { bgcolor: "rgba(255,255,255,0.18)", color: "#fff", fontWeight: 700 },
                 })
               )
@@ -929,6 +967,16 @@
                             },
                             placeholder: "8000",
                             size: "small",
+                          }),
+                          h(TextField, {
+                            label: "知识库",
+                            value: knowledgeBase,
+                            onChange: function (event) {
+                              setKnowledgeBase(event.target.value.trim() || "shop");
+                            },
+                            placeholder: "shop",
+                            size: "small",
+                            helperText: "对应 docs/ 下的目录名，例如 shop、shop1、shop2。",
                           }),
                           h(
                             Stack,
@@ -1135,6 +1183,12 @@
                                     title: "页面与路径状态",
                                     bgcolor: "rgba(217,119,6,0.05)",
                                   },
+                                  h(ConfigRow, {
+                                    label: "知识库",
+                                    value: runtimeConfig && runtimeConfig.knowledge_base ? runtimeConfig.knowledge_base.selected : knowledgeBase,
+                                    emphasis: true,
+                                    tooltip: "当前请求绑定的知识库名称，对应 docs/<knowledge_base>/ 目录。",
+                                  }),
                                   h(ConfigRow, {
                                     label: "Dashboard",
                                     value: dashboardConfig && dashboardConfig.dashboard_enabled ? "可用" : "不可用",

@@ -26,25 +26,25 @@ from faq_support import (
     is_faq_document,
     split_structured_faq_chunks,
 )
-from rag_config import DOCS_DIR, ENABLE_SUB_CHUNKING, USERNAME_GROUP_MAPPING_FILE
+from rag_config import ENABLE_SUB_CHUNKING, USERNAME_GROUP_MAPPING_FILE
 from retrieval_response_formatter import extract_context_labels
 
 FENCED_BLOCK_PATTERN = re.compile(r"```[\w-]*\n.*?\n```", re.DOTALL)
-MODULE_DIRECTORY_FILE = DOCS_DIR / "module-directory.yaml"
 
 
-def list_docs_markdown_files() -> List[Path]:
-    md_files = [Path(file_path) for file_path in glob.glob(f"{DOCS_DIR}/**/*.md", recursive=True)]
+def list_docs_markdown_files(docs_dir: Path) -> List[Path]:
+    md_files = [Path(file_path) for file_path in glob.glob(f"{docs_dir}/**/*.md", recursive=True)]
     return sorted(md_files)
 
 
-def normalize_docs_relative_path(relative_path: str) -> Path:
+def normalize_docs_relative_path(relative_path: str, docs_dir: Path) -> Path:
     cleaned = relative_path.strip().lstrip("/\\")
     if not cleaned:
         raise ValueError("relative path is empty")
 
-    candidate = (DOCS_DIR / cleaned).resolve()
-    if DOCS_DIR.resolve() not in candidate.parents and candidate != DOCS_DIR.resolve():
+    resolved_docs_dir = docs_dir.resolve()
+    candidate = (docs_dir / cleaned).resolve()
+    if resolved_docs_dir not in candidate.parents and candidate != resolved_docs_dir:
         raise ValueError("path escapes docs directory")
 
     if not candidate.is_file():
@@ -53,7 +53,7 @@ def normalize_docs_relative_path(relative_path: str) -> Path:
     return candidate
 
 
-def assert_document_access(path: Path, username: str) -> None:
+def assert_document_access(path: Path, username: str, docs_dir: Path) -> None:
     normalized_username = normalize_username(username)
 
     with open(path, "r", encoding="utf-8") as file_handle:
@@ -67,7 +67,7 @@ def assert_document_access(path: Path, username: str) -> None:
     if is_document_accessible(user_subjects, acl_subjects):
         return
 
-    source_file = str(path.resolve().relative_to(DOCS_DIR.resolve())).replace("\\", "/")
+    source_file = str(path.resolve().relative_to(docs_dir.resolve())).replace("\\", "/")
     raise HTTPException(
         status_code=403,
         detail={
@@ -82,9 +82,10 @@ def assert_document_access(path: Path, username: str) -> None:
 def build_chunk_id(metadata: dict, chunk_index: int, content: str | None = None) -> str:
     domain, doc_type, headers = extract_context_labels(metadata)
     source_file = str(metadata.get("source_file", ""))
+    knowledge_base = str(metadata.get("knowledge_base", "")).strip()
     normalized_content = " ".join(str(content or "").split())
     content_digest = hashlib.sha256(normalized_content.encode("utf-8")).hexdigest()
-    raw_key = f"{domain}|{doc_type}|{headers}|{source_file}|{chunk_index}|{content_digest}"
+    raw_key = f"{knowledge_base}|{domain}|{doc_type}|{headers}|{source_file}|{chunk_index}|{content_digest}"
     return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 
 
@@ -156,19 +157,20 @@ def _normalize_related_domains(value: Any, current_domain: str) -> list[str]:
     return normalized_domains
 
 
-@lru_cache(maxsize=1)
-def _load_module_directory_payload() -> dict[str, Any]:
-    if not MODULE_DIRECTORY_FILE.is_file():
+@lru_cache(maxsize=32)
+def _load_module_directory_payload(docs_dir_str: str) -> dict[str, Any]:
+    module_directory_file = Path(docs_dir_str) / "module-directory.yaml"
+    if not module_directory_file.is_file():
         return {}
 
-    with open(MODULE_DIRECTORY_FILE, "r", encoding="utf-8") as file_handle:
+    with open(module_directory_file, "r", encoding="utf-8") as file_handle:
         payload = yaml.safe_load(file_handle)
 
     return payload if isinstance(payload, dict) else {}
 
 
-def _build_domain_alias_map() -> dict[str, list[str]]:
-    payload = _load_module_directory_payload()
+def _build_domain_alias_map(docs_dir: Path) -> dict[str, list[str]]:
+    payload = _load_module_directory_payload(str(docs_dir.resolve()))
     modules = payload.get("modules", [])
     if not isinstance(modules, list):
         return {}
@@ -233,6 +235,7 @@ def _load_markdown_payload(file_path: Path, docs_dir: Path) -> tuple[str, dict[s
 
     current_domain = _normalize_metadata_text(yaml_metadata.get("domain") or "global") or "global"
     yaml_metadata["domain"] = current_domain
+    yaml_metadata["knowledge_base"] = docs_dir.name
     yaml_metadata["summary"] = _normalize_metadata_text(yaml_metadata.get("summary") or yaml_metadata.get("description"))
     yaml_metadata["keywords"] = _normalize_metadata_keywords(yaml_metadata.get("keywords"))
     yaml_metadata["related_domains"] = _normalize_related_domains(yaml_metadata.get("related_domains"), current_domain)
@@ -241,7 +244,7 @@ def _load_markdown_payload(file_path: Path, docs_dir: Path) -> tuple[str, dict[s
     return text_content, yaml_metadata, source_file
 
 
-def _extract_related_domains(text_content: str, yaml_metadata: dict[str, Any], source_file: str) -> list[str]:
+def _extract_related_domains(text_content: str, yaml_metadata: dict[str, Any], source_file: str, docs_dir: Path) -> list[str]:
     current_domain = str(yaml_metadata.get("domain", "global")).strip()
     explicit_related_domains = _normalize_related_domains(yaml_metadata.get("related_domains"), "")
     if explicit_related_domains:
@@ -250,7 +253,7 @@ def _extract_related_domains(text_content: str, yaml_metadata: dict[str, Any], s
     normalized_text = f"{source_file}\n{text_content}".lower()
     compact_text = _normalize_search_text(f"{source_file}\n{text_content}")
     domain_scores: dict[str, int] = {}
-    for domain_name, aliases in _build_domain_alias_map().items():
+    for domain_name, aliases in _build_domain_alias_map(docs_dir).items():
         score = 0
         for alias in aliases:
             alias_text = alias.lower()
@@ -279,7 +282,7 @@ def _extract_related_domains(text_content: str, yaml_metadata: dict[str, Any], s
     return ranked_domains[:2]
 
 
-def _build_parent_document(text_content: str, yaml_metadata: dict[str, Any], source_file: str) -> Document | None:
+def _build_parent_document(text_content: str, yaml_metadata: dict[str, Any], source_file: str, docs_dir: Path) -> Document | None:
     title = str(yaml_metadata.get("title") or extract_markdown_title(text_content) or Path(source_file).stem).strip()
     summary = _normalize_metadata_text(yaml_metadata.get("summary") or yaml_metadata.get("description"))
 
@@ -308,7 +311,7 @@ def _build_parent_document(text_content: str, yaml_metadata: dict[str, Any], sou
     if not summary and not page_content:
         return None
 
-    related_domains = _extract_related_domains(text_content, yaml_metadata, source_file)
+    related_domains = _extract_related_domains(text_content, yaml_metadata, source_file, docs_dir)
     parent_metadata = yaml_metadata.copy()
     parent_metadata["source_file"] = source_file
     parent_metadata["chunk_index"] = 0
@@ -382,7 +385,7 @@ def _build_child_documents(text_content: str, yaml_metadata: dict[str, Any], sou
 
 def build_index_documents(file_path: Path, docs_dir: Path) -> tuple[Document | None, List[Document]]:
     text_content, yaml_metadata, source_file = _load_markdown_payload(file_path, docs_dir)
-    parent_document = _build_parent_document(text_content, yaml_metadata, source_file)
+    parent_document = _build_parent_document(text_content, yaml_metadata, source_file, docs_dir)
     child_documents = _build_child_documents(text_content, yaml_metadata, source_file)
     return parent_document, child_documents
 
