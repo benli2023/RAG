@@ -230,3 +230,34 @@ def resolve_accessible_sources(
     restricted_source_files = [entry["source_file"] for entry in restricted_entries]
     accessible_domains = sorted({entry["domain"] for entry in accessible_entries})
     return accessible_source_files, restricted_source_files, accessible_domains
+
+
+def resolve_accessible_source_files(
+    username: str,
+    requested_source_files: list[str],
+    docs_dir: Path,
+    username_group_mapping_file: Path,
+) -> tuple[list[str], list[str], list[str]]:
+    manifest = load_document_access_manifest(docs_dir)
+    group_mapping = load_username_group_mapping(username_group_mapping_file)
+    user_subjects = resolve_user_subjects(normalize_username(username), group_mapping)
+    normalized_requested = dedupe_values(requested_source_files)
+    requested_set = set(normalized_requested)
+    candidate_entries = [
+        entry for entry in manifest
+        if not requested_set or entry["source_file"] in requested_set
+    ]
+
+    accessible_entries = [
+        entry for entry in candidate_entries
+        if is_document_accessible(user_subjects, entry["acl_subjects"])
+    ]
+    restricted_entries = [
+        entry for entry in candidate_entries
+        if entry not in accessible_entries
+    ]
+
+    accessible_source_files = dedupe_values([entry["source_file"] for entry in accessible_entries])
+    restricted_source_files = dedupe_values([entry["source_file"] for entry in restricted_entries])
+    accessible_domains = dedupe_values([str(entry["domain"]).strip() for entry in accessible_entries if str(entry["domain"]).strip()])
+    return accessible_source_files, restricted_source_files, accessible_domains

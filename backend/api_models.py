@@ -11,6 +11,7 @@ class SourceFileRequest(BaseModel):
 class QueryRequest(BaseModel):
     query: str
     domains: list[str] = Field(default_factory=list)
+    source_files: list[str] = Field(default_factory=list)
     query_type: str = "semantic"
     username: str = ANONYMOUS_USERNAME
     knowledge_base: str = DEFAULT_KNOWLEDGE_BASE

@@ -5,7 +5,7 @@ from typing import Any
 
 from langchain_core.documents import Document
 
-from access_control import build_source_file_filter, dedupe_values, load_document_access_manifest, normalize_username, resolve_accessible_sources
+from access_control import build_source_file_filter, dedupe_values, load_document_access_manifest, normalize_username, resolve_accessible_source_files, resolve_accessible_sources
 from context_compression_service import compress_context
 from es_service import search_bm25_documents
 from faq_support import rank_results_for_generation
@@ -63,6 +63,13 @@ def _merge_domain_lists(*domain_lists: list[str]) -> list[str]:
     merged: list[str] = []
     for domain_list in domain_lists:
         merged.extend(domain_list)
+    return dedupe_values(merged)
+
+
+def _merge_source_file_lists(*source_file_lists: list[str]) -> list[str]:
+    merged: list[str] = []
+    for source_file_list in source_file_lists:
+        merged.extend(source_file_list)
     return dedupe_values(merged)
 
 
@@ -124,10 +131,31 @@ def _list_all_source_files(docs_dir: Path) -> list[str]:
     return dedupe_values([str(entry["source_file"]).strip() for entry in manifest if str(entry["source_file"]).strip()])
 
 
+def _resolve_requested_scope_source_files(requested_source_files: list[str], requested_domains: list[str], docs_dir: Path) -> list[str]:
+    normalized_requested_source_files = dedupe_values(requested_source_files)
+    normalized_requested_domains = dedupe_values(requested_domains)
+
+    if not normalized_requested_source_files and not normalized_requested_domains:
+        return _list_all_source_files(docs_dir)
+
+    domain_scoped_source_files = _resolve_source_files_for_scope([], normalized_requested_domains, docs_dir) if normalized_requested_domains else []
+    requested_source_file_scope = _resolve_source_files_for_scope(
+        normalized_requested_source_files,
+        normalized_requested_domains,
+        docs_dir,
+    ) if normalized_requested_source_files else []
+
+    if normalized_requested_source_files and not normalized_requested_domains and not requested_source_file_scope:
+        return []
+
+    return _merge_source_file_lists(domain_scoped_source_files, requested_source_file_scope)
+
+
 def _build_trace(
     query: str,
     username: str,
     requested_domains: list[str],
+    requested_source_files: list[str],
     authorized_domains: list[str],
     authorized_source_files: list[str],
     restricted_source_files: list[str],
@@ -137,6 +165,7 @@ def _build_trace(
         "query": query,
         "username": username,
         "requested_domains": requested_domains,
+        "requested_source_files": requested_source_files,
         "authorized_domains": authorized_domains,
         "authorized_source_files": authorized_source_files,
         "restricted_source_files": restricted_source_files,
@@ -382,12 +411,14 @@ def run_retrieval_pipeline(
     query: str,
     username: str,
     domains: list[str] | None = None,
+    source_files: list[str] | None = None,
     query_type: str | None = None,
     knowledge_base: str | None = None,
 ) -> dict[str, Any]:
     normalized_query = query.strip()
     normalized_username = normalize_username(username)
     normalized_requested_domains = dedupe_values(domains or [])
+    normalized_requested_source_files = dedupe_values(source_files or [])
     normalized_query_type = normalize_query_type(query_type)
     normalized_knowledge_base = normalize_knowledge_base_name(knowledge_base)
     docs_dir = get_knowledge_base_dir(normalized_knowledge_base)
@@ -404,13 +435,18 @@ def run_retrieval_pipeline(
     if resolved_execution_mode == "hybrid" and _is_sql_query_candidate(normalized_query):
         resolved_execution_mode = "sql_query"
 
-    requested_scope_source_files = _resolve_source_files_for_scope([], normalized_requested_domains, docs_dir) if normalized_requested_domains else _list_all_source_files(docs_dir)
+    requested_scope_source_files = _resolve_requested_scope_source_files(
+        normalized_requested_source_files,
+        normalized_requested_domains,
+        docs_dir,
+    )
     has_candidate_documents = bool(requested_scope_source_files)
     filter_value = build_source_file_filter(requested_scope_source_files) if requested_scope_source_files else None
     trace = _build_trace(
         query=normalized_query,
         username=normalized_username,
         requested_domains=normalized_requested_domains,
+        requested_source_files=normalized_requested_source_files,
         authorized_domains=normalized_requested_domains,
         authorized_source_files=requested_scope_source_files,
         restricted_source_files=[],
@@ -511,6 +547,7 @@ def run_retrieval_pipeline(
         if parent_results:
             parent_target_source_files = _extract_source_files(parent_results)
             if parent_target_source_files:
+                merged_requested_source_files = _merge_source_file_lists(normalized_requested_source_files, parent_target_source_files)
                 primary_domains = _extract_primary_domains(parent_results, parent_target_source_files, docs_dir)
                 expanded_routed_domains = _extract_routed_domains(parent_results, parent_target_source_files, docs_dir)
                 if not expanded_routed_domains:
@@ -521,13 +558,44 @@ def run_retrieval_pipeline(
                     narrowed_domains = list(expanded_routed_domains)
 
                 combined_domains = _merge_domain_lists(normalized_requested_domains, narrowed_domains)
-                combined_source_files, restricted_source_files, combined_authorized_domains = resolve_accessible_sources(
-                    normalized_username,
-                    combined_domains,
-                    docs_dir,
-                    USERNAME_GROUP_MAPPING_FILE,
+                domain_scoped_source_files = _resolve_source_files_for_scope([], combined_domains, docs_dir) if combined_domains else []
+
+                combined_source_files: list[str] = []
+                restricted_domain_source_files: list[str] = []
+                combined_authorized_domains: list[str] = []
+                requested_source_files_accessible: list[str] = []
+                restricted_requested_source_files: list[str] = []
+                requested_source_file_domains: list[str] = []
+                if ENABLE_ACL:
+                    if combined_domains:
+                        combined_source_files, restricted_domain_source_files, combined_authorized_domains = resolve_accessible_sources(
+                            normalized_username,
+                            combined_domains,
+                            docs_dir,
+                            USERNAME_GROUP_MAPPING_FILE,
+                        )
+                    if merged_requested_source_files:
+                        requested_source_files_accessible, restricted_requested_source_files, requested_source_file_domains = resolve_accessible_source_files(
+                            normalized_username,
+                            merged_requested_source_files,
+                            docs_dir,
+                            USERNAME_GROUP_MAPPING_FILE,
+                        )
+
+                restricted_source_files = _merge_source_file_lists(
+                    restricted_domain_source_files,
+                    restricted_requested_source_files,
                 )
-                if ENABLE_ACL and not combined_source_files:
+                merged_scope_source_files = _merge_source_file_lists(
+                    domain_scoped_source_files,
+                    merged_requested_source_files,
+                )
+                accessible_scope_source_files = _merge_source_file_lists(
+                    combined_source_files,
+                    requested_source_files_accessible,
+                )
+
+                if ENABLE_ACL and not accessible_scope_source_files:
                     denied_domains = combined_domains or _extract_denied_domains(restricted_source_files)
                     print(
                         f"⛔ ACL deny user={normalized_username}, denied_files={restricted_source_files}, "
@@ -547,17 +615,22 @@ def run_retrieval_pipeline(
                         "response": response,
                         "trace": trace,
                     }
-                if combined_source_files:
-                    effective_authorized_source_files = combined_source_files
-                    effective_authorized_domains = combined_authorized_domains or combined_domains
-                    narrowed_source_files = combined_source_files
-                    narrowed_domains = combined_authorized_domains or combined_domains
+                if ENABLE_ACL and accessible_scope_source_files:
+                    effective_authorized_source_files = accessible_scope_source_files
+                    effective_authorized_domains = _merge_domain_lists(
+                        combined_authorized_domains,
+                        requested_source_file_domains,
+                        combined_domains,
+                    )
+                    narrowed_source_files = accessible_scope_source_files
+                    narrowed_domains = effective_authorized_domains or combined_domains
                 else:
                     narrowed_domains = combined_domains
-                    narrowed_source_files = _resolve_source_files_for_scope(requested_scope_source_files, narrowed_domains, docs_dir)
+                    narrowed_source_files = merged_scope_source_files
                     if not narrowed_source_files:
                         narrowed_source_files = parent_target_source_files
                     effective_authorized_domains = narrowed_domains
+                    effective_authorized_source_files = narrowed_source_files
                 two_stage_applied = True
                 two_stage_fallback_reason = "applied"
                 print(

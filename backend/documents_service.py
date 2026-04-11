@@ -2,7 +2,6 @@ import glob
 import hashlib
 import json
 import re
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, List
 
@@ -10,7 +9,6 @@ import frontmatter
 from fastapi import HTTPException
 from langchain_core.documents import Document
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
-import yaml
 
 from access_control import (
     is_document_accessible,
@@ -117,10 +115,6 @@ def _normalize_metadata_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
 
 
-def _normalize_search_text(value: Any) -> str:
-    return re.sub(r"\s+", "", str(value or "")).lower()
-
-
 def _normalize_metadata_keywords(value: Any) -> list[str]:
     if isinstance(value, list):
         raw_keywords = value
@@ -155,54 +149,6 @@ def _normalize_related_domains(value: Any, current_domain: str) -> list[str]:
         normalized_domains.insert(0, current_domain)
 
     return normalized_domains
-
-
-@lru_cache(maxsize=32)
-def _load_module_directory_payload(docs_dir_str: str) -> dict[str, Any]:
-    module_directory_file = Path(docs_dir_str) / "module-directory.yaml"
-    if not module_directory_file.is_file():
-        return {}
-
-    with open(module_directory_file, "r", encoding="utf-8") as file_handle:
-        payload = yaml.safe_load(file_handle)
-
-    return payload if isinstance(payload, dict) else {}
-
-
-def _build_domain_alias_map(docs_dir: Path) -> dict[str, list[str]]:
-    payload = _load_module_directory_payload(str(docs_dir.resolve()))
-    modules = payload.get("modules", [])
-    if not isinstance(modules, list):
-        return {}
-
-    alias_map: dict[str, list[str]] = {}
-    for module in modules:
-        if not isinstance(module, dict):
-            continue
-
-        domain = _normalize_metadata_text(module.get("domain"))
-        if not domain:
-            continue
-
-        aliases: list[str] = [domain]
-        aliases.extend(_normalize_metadata_keywords(module.get("keywords")))
-
-        files = module.get("files", [])
-        if isinstance(files, list):
-            for file_item in files:
-                if not isinstance(file_item, dict):
-                    continue
-                aliases.extend(_normalize_metadata_keywords(file_item.get("keywords")))
-
-        unique_aliases: list[str] = []
-        for alias in aliases:
-            cleaned_alias = _normalize_metadata_text(alias)
-            if cleaned_alias and cleaned_alias not in unique_aliases:
-                unique_aliases.append(cleaned_alias)
-
-        alias_map[domain] = unique_aliases
-
-    return alias_map
 
 
 def _protect_fenced_blocks(text: str) -> tuple[str, dict[str, str]]:
@@ -244,44 +190,6 @@ def _load_markdown_payload(file_path: Path, docs_dir: Path) -> tuple[str, dict[s
     return text_content, yaml_metadata, source_file
 
 
-def _extract_related_domains(text_content: str, yaml_metadata: dict[str, Any], source_file: str, docs_dir: Path) -> list[str]:
-    current_domain = str(yaml_metadata.get("domain", "global")).strip()
-    explicit_related_domains = _normalize_related_domains(yaml_metadata.get("related_domains"), "")
-    if explicit_related_domains:
-        return explicit_related_domains
-
-    normalized_text = f"{source_file}\n{text_content}".lower()
-    compact_text = _normalize_search_text(f"{source_file}\n{text_content}")
-    domain_scores: dict[str, int] = {}
-    for domain_name, aliases in _build_domain_alias_map(docs_dir).items():
-        score = 0
-        for alias in aliases:
-            alias_text = alias.lower()
-            compact_alias = _normalize_search_text(alias)
-            if alias_text and alias_text in normalized_text:
-                score += normalized_text.count(alias_text)
-            elif compact_alias and compact_alias in compact_text:
-                score += compact_text.count(compact_alias)
-        if score > 0:
-            domain_scores[domain_name] = score
-
-    if current_domain:
-        domain_scores[current_domain] = max(domain_scores.get(current_domain, 0), 1)
-
-    ranked_domains = [
-        domain_name
-        for domain_name, _ in sorted(domain_scores.items(), key=lambda item: (item[1], item[0] == current_domain), reverse=True)
-    ]
-
-    if current_domain and current_domain in ranked_domains:
-        ranked_domains.remove(current_domain)
-        ranked_domains.insert(0, current_domain)
-
-    if current_domain == "global":
-        return ranked_domains[:3]
-    return ranked_domains[:2]
-
-
 def _build_parent_document(text_content: str, yaml_metadata: dict[str, Any], source_file: str, docs_dir: Path) -> Document | None:
     title = str(yaml_metadata.get("title") or extract_markdown_title(text_content) or Path(source_file).stem).strip()
     summary = _normalize_metadata_text(yaml_metadata.get("summary") or yaml_metadata.get("description"))
@@ -311,12 +219,9 @@ def _build_parent_document(text_content: str, yaml_metadata: dict[str, Any], sou
     if not summary and not page_content:
         return None
 
-    related_domains = _extract_related_domains(text_content, yaml_metadata, source_file, docs_dir)
     parent_metadata = yaml_metadata.copy()
     parent_metadata["source_file"] = source_file
     parent_metadata["chunk_index"] = 0
-    if related_domains:
-        parent_metadata["related_domains"] = related_domains
     if title:
         parent_metadata["parent_title"] = title
 

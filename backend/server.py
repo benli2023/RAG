@@ -371,6 +371,7 @@ def retrieve_context(req: QueryRequest):
             query=req.query,
             username=req.username,
             domains=req.domains,
+            source_files=req.source_files,
             query_type=req.query_type,
             knowledge_base=req.knowledge_base,
         )
