@@ -1,138 +1,83 @@
 modules:
   - domain: global
-    description: 描述跨模块的业务全链路，包括用户鉴权、订单创建、支付拉起和支付成功后的异步状态回写。提供私有代码 RAG 方案的演示材料、系统架构图和时序图，帮助理解整体工作方式。
-    keywords:
-      - 跨模块流程
-      - 下单链路
-      - API Gateway
-      - Token 校验
-      - 支付回调
-      - PaymentSuccessEvent
-      - Agentic RAG
-      - Mermaid 架构图
+    summary: 描述跨模块的业务全链路，包括用户鉴权、订单创建、支付拉起和支付成功后的异步状态回写。提供私有代码 RAG 方案的演示材料、系统架构图和时序图，帮助理解整体工作方式。
     files:
       - name: global-workflows/demo.md
-        description: RAG 系统演示稿，介绍企业私有 RAG 的痛点、架构、时序图、知识治理方式和 ROI。
-        keywords:
-          - RAG 演示
-          - 企业私有 RAG
-          - 系统架构图
-          - 时序图
-          - 知识治理
-          - ROI
+        summary: 用封面页说明演讲主题、技术路线与整体定位。总结传统检索式 RAG 在语义切片、跨模块混淆和权限控制上的三类失败。展示从 Copilot 插件到内网网关、向量库和云端大模型的完整链路。说明权限交集计算、硬过滤检索和返回上下文的时序过程。说明如何用文档类型和元数据驱动结构化切分与索引。概括离线可用、多语言能力和轻量部署的检索基座。收束到 IDE 体验、检索准确率、成本优势和安全收益。
+        sections:
+          - title: 企业级私有 RAG 封面与副标题
+          - title: 传统 RAG 的痛点：大杂烩、跨模块幻觉与越权风险
+          - title: Agentic RAG 全景架构：路由、隔离与云端生成
+          - title: 权限校验与精准检索时序图
+          - title: Diátaxis 规范与 YAML 元数据注入
+          - title: BGE-M3 与 ChromaDB 本地向量引擎
+          - title: 开发者体验与 ROI：准确率、成本与安全
       - name: global-workflows/howto-checkout.md
-        description: 电商完整下单链路说明，串联用户中心、订单中心、支付网关和消息回调闭环。
-        keywords:
-          - 下单链路
-          - 订单创建
-          - 支付网关
-          - 消息回调
-          - 闭环流程
+        summary: 说明请求如何先完成 Token 校验，再把 user_id 传给订单中心。说明订单创建接口如何计算金额、生成订单号并扣减库存。说明下单成功后如何发起预支付，并校验支付金额和订单金额一致。说明支付成功后的微信回调、MQ 消息和订单状态流转闭环。
+        sections:
+          - title: API 网关鉴权与 user_id 透传
+          - title: 订单中心创单、金额计算与锁库存
+          - title: 支付网关唤起收银台与金额一致性校验
+          - title: PaymentSuccessEvent 异步回调与订单状态闭环
 
   - domain: order-center
-    description: 管理订单创建、金额计算、订单号生成、订单状态流转和超时未支付自动取消。覆盖订单主表设计、状态枚举、FAQ 和后端创单落库实施规范。
-    keywords:
-      - 订单中心
-      - 下单
-      - 创单
-      - t_order
-      - order_status
-      - INIT
-      - PAID
-      - CANCELED
-      - 雪花 ID
-      - RocketMQ
-      - 超时取消
-      - 库存释放
+    summary: 管理订单创建、金额计算、订单号生成、订单状态流转和超时未支付自动取消。覆盖订单主表设计、状态枚举、FAQ 和后端创单落库实施规范。
     files:
       - name: order-center/explanation.md
-        description: 解释订单生命周期、乐观锁状态机和待支付订单 15 分钟超时取消机制。
-        keywords:
-          - 订单生命周期
-          - 乐观锁
-          - 状态机
-          - 超时取消
-          - 15分钟
+        summary: 说明订单状态单向流转的约束，以及如何用 version 字段防止并发写错状态。说明待支付订单在 15 分钟内未支付时如何自动取消并释放库存。
+        sections:
+          - title: 订单状态机与 version 乐观锁
+          - title: INIT 待支付订单的 15 分钟超时取消机制
       - name: order-center/faq.md
-        description: 回答未支付订单处理、订单号生成方式、允许取消的状态等高频问题。
-        keywords:
-          - 未支付订单
-          - 订单号生成
-          - 订单取消
-          - 高频问题
-          - FAQ
+        summary: 解释用户下单后一直不支付时，系统如何通过延迟消息自动关闭订单。说明订单号必须使用雪花算法生成，不能直接暴露数据库自增主键。说明订单取消的状态边界，以及取消后状态会如何流转。解释延迟 MQ 发送时长与订单超时取消检查的关系。
+        sections:
+          - title: 未支付订单处理：15 分钟延迟 MQ 与超时取消
+          - title: 订单号生成：为什么不能使用数据库自增 ID
+          - title: 允许取消的状态：仅 INIT 可取消
+          - title: 延迟消息用途：触发 INIT 订单超时检查
       - name: order-center/howto-create.md
-        description: 指导后端如何实现订单落库，包括重新计算金额、事务插入和发送延迟 MQ。
-        keywords:
-          - 订单落库
-          - 金额计算
-          - 事务
-          - 延迟 MQ
-          - 创单实施
+        summary: 说明后端创单时必须使用分布式 ID 生成服务，而不是数据库自增主键。说明后端要按商品单价重新计算最终金额，不能相信前端传值。说明订单落库必须放在本地事务中，并把 order_status 设为 INIT。说明事务提交后要发延迟消息，用于后续超时取消检查。
+        sections:
+          - title: 生成雪花 ID 订单号
+          - title: 重新计算 total_amount 金额
+          - title: 通过 @Transactional 写入 t_order
+          - title: 发送 15 分钟延迟的 RocketMQ 消息
       - name: order-center/reference-db.md
-        description: 订单主表 t_order 字段说明与 order_status 状态枚举字典。
-        keywords:
-          - t_order
-          - order_status
-          - 数据库字段
-          - 状态枚举
-          - 字段说明
+        summary: 说明订单主表的核心字段、主键和分库分表策略。列出订单状态的标准枚举值及其业务含义。
+        sections:
+          - title: t_order 核心订单主表
+          - title: order_status 状态枚举字典
 
   - domain: payment-gateway
-    description: 负责支付网关侧的统一下单、签名、异步回调处理和退款调用约束。聚焦支付链路故障排查，特别是回调收不到、签名错误和退款并发风险。
-    keywords:
-      - 支付网关
-      - 统一下单
-      - SIGN_ERROR
-      - MD5 签名
-      - notify_status
-      - SUCCESS
-      - 微信回调
-      - 退款
-      - Redis 分布式锁
+    summary: 负责支付网关侧的统一下单、签名、异步回调处理和退款调用约束。聚焦支付链路故障排查，特别是回调收不到、签名错误和退款并发风险。
     files:
       - name: payment-gateway/faq-payment.md
-        description: 支付常见问题排查手册，覆盖支付成功未回调、签名错误和退款串行控制。
-        keywords:
-          - 支付未回调
-          - 签名错误
-          - 退款
-          - 串行控制
-          - 故障排查
-          - FAQ
+        summary: 说明微信回调未到达时，如何通过 notify_status 和网络出口排查问题。说明统一下单签名错误最常见的原因，以及如何按字典序生成签名。说明同一订单的退款请求必须串行，避免重复扣款风险。
+        sections:
+          - title: 支付成功但业务系统未收到回调：notify_status 排查
+          - title: SIGN_ERROR 签名错误：参数排序与 MD5 拼接
+          - title: 退款并发控制：Redis 分布式锁与串行调用
 
   - domain: user-center
-    description: 管理登录鉴权、Access Token / Refresh Token 双 Token 机制和统一身份透传。覆盖前端登录流程、Token 存储规范、401 无感刷新和用户中心登录接口参考。
-    keywords:
-      - 用户中心
-      - 登录
-      - Access Token
-      - Refresh Token
-      - 401 Unauthorized
-      - 无感刷新
-      - Authorization Bearer
-      - X-User-Id
-      - /api/v1/user/login
-      - /api/v1/user/refresh
+    summary: 管理登录鉴权、Access Token / Refresh Token 双 Token 机制和统一身份透传。覆盖前端登录流程、Token 存储规范、401 无感刷新和用户中心登录接口参考。
     files:
       - name: user-center/explanation.md
-        description: 说明双 Token 鉴权架构、Token 生命周期和网关统一鉴权方式。
-        keywords:
-          - 双 Token
-          - Token 生命周期
-          - 网关鉴权
-          - 鉴权架构
+        summary: 说明访问令牌与刷新令牌各自的职责，以及为什么要把短期访问与长期续期拆开。给出 Access Token 和 Refresh Token 的有效期与使用边界。说明网关如何统一校验 Access Token，并把用户身份透传给下游服务。
+        sections:
+          - title: 双 Token 职责分层：Access Token 与 Refresh Token
+          - title: Token 生命周期：2 小时访问令牌与 30 天刷新令牌
+          - title: 网关统一鉴权：Authorization Bearer 与 X-User-Id 透传
       - name: user-center/howto-login.md
-        description: 规范前端登录接入流程，包括登录、存储 Token、鉴权请求和过期刷新。
-        keywords:
-          - 前端登录
-          - Token 存储
-          - 过期刷新
-          - 鉴权请求
+        summary: 收集手机号和密码，调用用户中心登录接口完成首次鉴权。登录成功后把双 Token 放入安全存储，避免 LocalStorage 暴露风险。说明后续调用订单中心等接口时如何携带访问令牌。当 Access Token 过期时，前端通过 refresh 接口静默换取新令牌并重试请求。
+        sections:
+          - title: 调用 /api/v1/user/login 发起登录
+          - title: 安全存储 access_token 与 refresh_token
+          - title: 业务请求携带 Authorization Bearer
+          - title: 401 无感刷新：调用 /api/v1/user/refresh 续期
       - name: user-center/reference-api.md
-        description: 用户登录接口的请求参数、返回字段和业务错误码参考。
-        keywords:
-          - 登录接口
-          - 请求参数
-          - 业务错误码
-          - API 参考
+        summary: 描述登录接口的功能、请求参数、响应参数和错误码。列出手机号和密码两个请求字段及其校验要求。说明 user_id、access_token 和 refresh_token 的返回含义。收录登录失败时的业务错误码与前端提示含义。
+        sections:
+          - title: POST /api/v1/user/login 账号密码登录接口
+          - title: Request Body 请求参数
+          - title: Response Data 响应参数
+          - title: 业务错误码字典

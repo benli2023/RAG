@@ -233,7 +233,7 @@ def _load_markdown_payload(file_path: Path, docs_dir: Path) -> tuple[str, dict[s
 
     current_domain = _normalize_metadata_text(yaml_metadata.get("domain") or "global") or "global"
     yaml_metadata["domain"] = current_domain
-    yaml_metadata["description"] = _normalize_metadata_text(yaml_metadata.get("description"))
+    yaml_metadata["summary"] = _normalize_metadata_text(yaml_metadata.get("summary") or yaml_metadata.get("description"))
     yaml_metadata["keywords"] = _normalize_metadata_keywords(yaml_metadata.get("keywords"))
     yaml_metadata["related_domains"] = _normalize_related_domains(yaml_metadata.get("related_domains"), current_domain)
 
@@ -281,22 +281,22 @@ def _extract_related_domains(text_content: str, yaml_metadata: dict[str, Any], s
 
 def _build_parent_document(text_content: str, yaml_metadata: dict[str, Any], source_file: str) -> Document | None:
     title = str(yaml_metadata.get("title") or extract_markdown_title(text_content) or Path(source_file).stem).strip()
-    description = _normalize_metadata_text(yaml_metadata.get("description"))
-    if not description:
+    summary = _normalize_metadata_text(yaml_metadata.get("summary") or yaml_metadata.get("description"))
+    if not summary:
         return None
 
     related_domains = _extract_related_domains(text_content, yaml_metadata, source_file)
     parent_metadata = yaml_metadata.copy()
     parent_metadata["source_file"] = source_file
     parent_metadata["chunk_index"] = 0
-    if description:
-        parent_metadata["parent_description"] = description
+    if summary:
+        parent_metadata["parent_summary"] = summary
     if related_domains:
         parent_metadata["related_domains"] = related_domains
     if title:
         parent_metadata["parent_title"] = title
 
-    return Document(page_content=description, metadata=parent_metadata)
+    return Document(page_content=summary, metadata=parent_metadata)
 
 
 def _build_child_documents(text_content: str, yaml_metadata: dict[str, Any], source_file: str) -> List[Document]:
@@ -344,13 +344,13 @@ def _build_child_documents(text_content: str, yaml_metadata: dict[str, Any], sou
 
         protected_content, placeholders = _protect_fenced_blocks(chunk.page_content)
         
-        description = _normalize_metadata_text(yaml_metadata.get("description"))
+        summary = _normalize_metadata_text(yaml_metadata.get("summary") or yaml_metadata.get("description"))
         keywords = yaml_metadata.get("keywords", [])
         keywords_str = ", ".join(keywords) if isinstance(keywords, list) else str(keywords)
         
         injection_text = ""
-        if description:
-            injection_text += f"[文档描述: {description}]\n"
+        if summary:
+            injection_text += f"[文档摘要: {summary}]\n"
         if keywords_str:
             injection_text += f"[文档关键词: {keywords_str}]\n"
             

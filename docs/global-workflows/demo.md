@@ -2,35 +2,49 @@
 domain: global
 type: how-to
 version: v1.0
-description: RAG 系统演示稿，介绍企业私有 RAG 的痛点、架构、时序图、知识治理方式和 ROI。
+summary: 用封面页说明演讲主题、技术路线与整体定位。总结传统检索式 RAG 在语义切片、跨模块混淆和权限控制上的三类失败。展示从 Copilot 插件到内网网关、向量库和云端大模型的完整链路。说明权限交集计算、硬过滤检索和返回上下文的时序过程。说明如何用文档类型和元数据驱动结构化切分与索引。概括离线可用、多语言能力和轻量部署的检索基座。收束到 IDE 体验、检索准确率、成本优势和安全收益。
 related_domains:
     - global
 keywords:
-    - 跨模块流程
-    - 下单链路
-    - API Gateway
-    - Token 校验
-    - 支付回调
-    - PaymentSuccessEvent
-    - Agentic RAG
-    - Mermaid 架构图
     - RAG 演示
     - 企业私有 RAG
-    - 系统架构图
-    - 时序图
-    - 知识治理
     - ROI
+    - 传统 RAG
+    - 跨模块幻觉
+    - 数据越权风险
+    - Agentic RAG
+    - 系统架构图
+    - 意图路由
+    - 权限校验
+    - 时序图
+    - 硬过滤
+    - Diátaxis
+    - YAML Metadata
+    - 结构化切分
+    - BGE-M3
+    - ChromaDB
+    - 本地向量引擎
+    - 开发者体验
+    - 安全
+sections:
+        - title: 企业级私有 RAG 封面与副标题
+        - title: 传统 RAG 的痛点：大杂烩、跨模块幻觉与越权风险
+        - title: Agentic RAG 全景架构：路由、隔离与云端生成
+        - title: 权限校验与精准检索时序图
+        - title: Diátaxis 规范与 YAML 元数据注入
+        - title: BGE-M3 与 ChromaDB 本地向量引擎
+        - title: 开发者体验与 ROI：准确率、成本与安全
 acl:
     allow:
         - "*"
 ---
 
-# 演讲主题：打造下一代企业级私有代码 RAG 系统
+# 企业级私有 RAG 演讲：Agentic RAG、零信任与 ROI
 **副标题：基于 GitHub Copilot 与 Agentic RAG 的零信任知识库实践**
 
 ---
 
-## 📄 Slide 1: 封面
+## 📄 Slide 1: 企业级私有 RAG 封面与副标题
 **【PPT 画面内容】**
 *   **大标题：** 让 Copilot 真正懂我们的业务：企业级私有 RAG 最佳实践
 *   **副标题：** 从“大杂烩检索”到“意图路由 + 零信任隔离”
@@ -43,7 +57,7 @@ acl:
 
 ---
 
-## 📄 Slide 2: 传统 RAG 的痛点（为什么过去总是失败？）
+## 📄 Slide 2: 传统 RAG 的痛点：大杂烩、跨模块幻觉与越权风险
 **【PPT 画面内容】**
 *   **左侧视觉：** 一个画着大杂烩的图标，或者一堆乱七八糟混在一起的文档和代码片段。
 *   **右侧视觉：** Copilot 给出了一段把“订单状态”和“支付状态”混在一起的错误代码（带有 ❌ 符号）。
@@ -56,7 +70,7 @@ acl:
 
 ---
 
-## 📄 Slide 3: 全新系统交互全景图：Agentic RAG
+## 📄 Slide 3: Agentic RAG 全景架构：路由、隔离与云端生成
 **【PPT 画面内容】**
 *   *(请将以下 Mermaid 代码渲染为架构图放入 PPT)*
 ```mermaid
@@ -98,7 +112,7 @@ graph LR
 
 ---
 
-## 📄 Slide 4: 核心链路剖析：系统时序图展示
+## 📄 Slide 4: 权限校验与精准检索时序图
 **【PPT 画面内容】**
 *   *(请将以下 Mermaid 代码渲染为时序图放入 PPT，重点突出权限校验和检索的过程)*
 ```mermaid
@@ -134,7 +148,7 @@ sequenceDiagram
 
 ---
 
-## 📄 Slide 5: 数据基建：Diátaxis 规范与元数据注入
+## 📄 Slide 5: Diátaxis 规范与 YAML 元数据注入
 **【PPT 画面内容】**
 *   **左侧：** Diátaxis 的 2x2 矩阵图（Tutorials, How-to, Reference, Explanation）。
 *   **右侧：** 一个带有 YAML Metadata 的 Markdown 代码截图。
@@ -156,7 +170,7 @@ sequenceDiagram
 
 ---
 
-## 📄 Slide 6: 检索心脏：高性能本地向量引擎 (BGE-M3)
+## 📄 Slide 6: BGE-M3 与 ChromaDB 本地向量引擎
 **【PPT 画面内容】**
 *   **视觉元素：** BAAI/bge-m3 和 ChromaDB 的 Logo。
 *   **三个标签：** 
@@ -168,7 +182,7 @@ sequenceDiagram
 
 ---
 
-## 📄 Slide 7: 开发者体验与最终业务价值 (ROI)
+## 📄 Slide 7: 开发者体验与 ROI：准确率、成本与安全
 **【PPT 画面内容】**
 *   **左侧：** 模拟 VS Code 侧边栏对话流的截图。
     *   *用户输入：`@mycorp 前端调登录接口报错 401 怎么办？`*

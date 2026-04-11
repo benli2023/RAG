@@ -2,15 +2,25 @@
 domain: user-center
 type: reference
 version: v1.0
-description: 用户登录接口的请求参数、返回字段和业务错误码参考。
+summary: 描述登录接口的功能、请求参数、响应参数和错误码。列出手机号和密码两个请求字段及其校验要求。说明 user_id、access_token 和 refresh_token 的返回含义。收录登录失败时的业务错误码与前端提示含义。
 keywords:
-  - 用户中心
-  - 用户中心 API 参考手册
+  - /api/v1/user/login
   - 账号密码登录接口
-  - 请求参数
-  - 响应参数
-  - 业务错误码字典
   - API 参考
+  - 请求参数
+  - Request Body
+  - 响应参数
+  - Response Data
+  - 业务错误码字典
+  - 10001
+  - 10002
+  - 10003
+  - 10004
+sections:
+  - title: POST /api/v1/user/login 账号密码登录接口
+  - title: Request Body 请求参数
+  - title: Response Data 响应参数
+  - title: 业务错误码字典
 acl:
   groups:
     - iam-admin
@@ -18,9 +28,9 @@ acl:
     - zhangsan
 ---
 
-# 用户中心 API 参考手册
+# 用户中心 /api/v1/user/login 接口参考手册
 
-## 1. 账号密码登录接口
+## 账号密码登录接口：POST /api/v1/user/login
 **接口路径**: `POST /api/v1/user/login`
 **功能描述**: 验证用户手机号与密码，成功后发放鉴权 Token。
 

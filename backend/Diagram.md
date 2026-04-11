@@ -1,12 +1,12 @@
 ## domain / keywords / related_domains 如何映射到域推断
 
-这张图把 `module-directory.yaml` 里的配置、别名展开、相关域推断串成一条链路。现在系统不再依赖手写的 `DOMAIN_ALIAS_MAP`，而是从目录配置里的 `domain`、`keywords` 和 `files[].keywords` 生成可匹配别名，再用于 `related_domains` 推断。
+这张图把 `module-directory.yaml` 里的配置、别名展开、相关域推断串成一条链路。现在系统不再依赖手写的 `DOMAIN_ALIAS_MAP`，而是从目录配置里的 `domain` 以及可选的 `keywords`、`files[].keywords` 生成可匹配别名，再用于 `related_domains` 推断。当前 `docs/module-directory.yaml` 可以不包含这些字段；缺省时只用 `domain` 做匹配。
 
 ```mermaid
 flowchart TD
     A["module-directory.yaml"] --> B["modules domain"]
-    A --> C["modules keywords"]
-    A --> D["files keywords"]
+    A --> C["modules keywords（可选）"]
+    A --> D["files keywords（可选）"]
 
     B --> E[_build_domain_alias_map]
     C --> E
@@ -32,7 +32,7 @@ flowchart TD
 关键关系可以直接理解成三层：
 
 - `domain` 是标准域名，是最终归属的主键。
-- `keywords` 和 `files[].keywords` 是这个域的别名池，会被展开成可匹配字符串。
+- `keywords` 和 `files[].keywords` 如果存在，会被展开成可匹配字符串；如果不存在，后端只按 `domain` 进行兜底匹配。
 - `related_domains` 是推断结果或显式配置，最终写入父文档元数据，供阶段一父文档召回和跨域扩展使用。
 
 ## 阶段一 / 阶段二检索流程
