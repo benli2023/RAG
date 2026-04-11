@@ -5,8 +5,8 @@ from typing import Any
 
 from langchain_core.documents import Document
 
-from documents_service import build_chunk_id, sanitize_metadata
-from rag_config import ES_ENABLED, ES_ENABLED_CONFIGURED, ES_INDEX_NAME, ES_URL
+from documents_service import build_chunk_id
+from rag_config import ES_ENABLED, ES_ENABLED_CONFIGURED, ES_INDEX_NAME, ES_PARENT_INDEX_NAME, ES_URL
 
 try:
     from elasticsearch import Elasticsearch
@@ -17,45 +17,114 @@ except ImportError:
 _es_client = None
 _es_unavailable_reason: str | None = None
 _es_disabled_warned = False
+_es_analyzer_fallback_warned = False
 
-_INDEX_BODY = {
-    "settings": {
-        "analysis": {
-            "analyzer": {
-                "default": {
-                    "type": "ik_max_word"
-                },
-                "default_search": {
-                    "type": "ik_smart"
+
+def _resolve_analyzer_mode_from_mapping(mapping: dict[str, Any]) -> str:
+    properties = mapping.get("properties", {}) if isinstance(mapping, dict) else {}
+    content_mapping = properties.get("content", {}) if isinstance(properties, dict) else {}
+    analyzer = str(content_mapping.get("analyzer", "")).strip()
+    search_analyzer = str(content_mapping.get("search_analyzer", "")).strip()
+
+    if analyzer == "ik_max_word" and search_analyzer == "ik_smart":
+        return "ik"
+    if analyzer or search_analyzer:
+        return "custom"
+    return "standard"
+
+def _text_field_mapping(use_ik_analyzer: bool) -> dict[str, Any]:
+    if not use_ik_analyzer:
+        return {"type": "text"}
+    return {"type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart"}
+
+
+def _build_index_body(use_ik_analyzer: bool) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "mappings": {
+            "dynamic": "strict",
+            "properties": {
+                "chunk_id": {"type": "keyword"},
+                "source_file": {"type": "keyword"},
+                "domain": {"type": "keyword"},
+                "type": {"type": "keyword"},
+                "Header 1": {"type": "keyword"},
+                "Header 2": {"type": "keyword"},
+                "Header 3": {"type": "keyword"},
+                "related_domains": {"type": "keyword"},
+                "content": _text_field_mapping(use_ik_analyzer),
+                "header_text": _text_field_mapping(use_ik_analyzer),
+                "summary": _text_field_mapping(use_ik_analyzer),
+                "keywords_text": _text_field_mapping(use_ik_analyzer),
+                "sections_text": _text_field_mapping(use_ik_analyzer),
+                "related_domains_text": _text_field_mapping(use_ik_analyzer),
+                "parent_title": _text_field_mapping(use_ik_analyzer),
+                "chunk_index": {"type": "integer"},
+                "is_faq": {"type": "boolean"},
+                "faq": {"type": "boolean"},
+                "faq_question": _text_field_mapping(use_ik_analyzer),
+            },
+        },
+    }
+    if use_ik_analyzer:
+        body["settings"] = {
+            "analysis": {
+                "analyzer": {
+                    "default": {
+                        "type": "ik_max_word"
+                    },
+                    "default_search": {
+                        "type": "ik_smart"
+                    }
                 }
             }
         }
-    },
-    "mappings": {
-        "dynamic": True,
-        "properties": {
-            "chunk_id": {"type": "keyword"},
-            "source_file": {"type": "keyword"},
-            "domain": {"type": "keyword"},
-            "type": {"type": "keyword"},
-            "content": {"type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart"},
-            "header_text": {"type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart"},
-            "summary": {"type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart"},
-            "keywords_text": {"type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart"},
-            "sections_text": {"type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart"},
-            "related_domains_text": {"type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart"},
-            "parent_title": {"type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart"},
-            "chunk_index": {"type": "integer"},
-            "is_faq": {"type": "boolean"},
-            "faq": {"type": "boolean"},
-            "faq_question": {"type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart"},
-        },
-    }
-}
+    return body
 
 
 def _coerce_text(value: Any) -> str:
     return str(value).strip() if value not in (None, "") else ""
+
+
+def _coerce_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return False
+
+
+def _coerce_keyword_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        raw_values = value
+    elif isinstance(value, str):
+        cleaned = value.strip()
+        raw_values = [cleaned] if cleaned else []
+    else:
+        raw_values = []
+
+    normalized_values: list[str] = []
+    for item in raw_values:
+        cleaned_item = str(item).strip()
+        if cleaned_item and cleaned_item not in normalized_values:
+            normalized_values.append(cleaned_item)
+    return normalized_values
+
+
+def _drop_empty_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in payload.items()
+        if value not in (None, "", [])
+    }
 
 
 def _coerce_list_to_text(value: Any) -> str:
@@ -114,6 +183,16 @@ def _warn_disabled(action: str) -> None:
     print(f"[elasticsearch] {reason}; skip {action}")
 
 
+def _warn_analyzer_fallback() -> None:
+    global _es_analyzer_fallback_warned
+
+    if _es_analyzer_fallback_warned:
+        return
+
+    _es_analyzer_fallback_warned = True
+    print("[elasticsearch] IK analyzer unavailable; fallback to standard text analyzer")
+
+
 def get_es_client():
     global _es_client
 
@@ -144,40 +223,58 @@ def get_es_client():
         _raise_unavailable()
 
 
-def ensure_index(client=None, index_name: str = ES_INDEX_NAME) -> bool:
+def ensure_index(client=None, index_name: str = ES_INDEX_NAME, recreate: bool = False) -> bool:
     if not ES_ENABLED:
         return False
 
     resolved_client = client or get_es_client()
 
+    if recreate and resolved_client.indices.exists(index=index_name):
+        resolved_client.indices.delete(index=index_name)
+
     if resolved_client.indices.exists(index=index_name):
         return True
 
-    resolved_client.indices.create(index=index_name, body=_INDEX_BODY)
+    try:
+        resolved_client.indices.create(index=index_name, body=_build_index_body(use_ik_analyzer=True))
+    except Exception as exc:
+        if "Unknown analyzer type" not in str(exc):
+            raise
+        _warn_analyzer_fallback()
+        resolved_client.indices.create(index=index_name, body=_build_index_body(use_ik_analyzer=False))
     return True
 
 
 def _build_es_source(doc: Document) -> tuple[str, dict[str, Any]]:
-    metadata = sanitize_metadata(doc.metadata)
-    chunk_index = int(metadata.get("chunk_index", 1))
+    metadata = dict(doc.metadata or {})
+    chunk_index = _coerce_int(metadata.get("chunk_index", 1), default=1)
     chunk_id = build_chunk_id(metadata, chunk_index, doc.page_content)
 
-    # Build sections_text from the original (pre-sanitized) metadata to handle
-    # list-of-dict structures that sanitize_metadata may have JSON-encoded.
-    raw_sections = doc.metadata.get("sections") if doc.metadata else None
+    raw_sections = metadata.get("sections")
     sections_text = _coerce_sections_text(raw_sections)
+    related_domains = _coerce_keyword_list(metadata.get("related_domains"))
 
-    source = {
-        **metadata,
+    source = _drop_empty_fields({
         "chunk_id": chunk_id,
+        "source_file": _coerce_text(metadata.get("source_file")),
+        "domain": _coerce_text(metadata.get("domain")),
+        "type": _coerce_text(metadata.get("type")),
+        "chunk_index": chunk_index,
         "content": doc.page_content,
         "header_text": _build_header_text(metadata),
+        "Header 1": _coerce_text(metadata.get("Header 1")),
+        "Header 2": _coerce_text(metadata.get("Header 2")),
+        "Header 3": _coerce_text(metadata.get("Header 3")),
         "summary": _coerce_text(metadata.get("summary") or metadata.get("description")),
         "keywords_text": _coerce_list_to_text(metadata.get("keywords")),
         "sections_text": sections_text,
-        "related_domains_text": _coerce_list_to_text(metadata.get("related_domains")),
+        "related_domains": related_domains,
+        "related_domains_text": _coerce_list_to_text(related_domains),
         "parent_title": _coerce_text(metadata.get("parent_title")),
-    }
+        "faq": _coerce_bool(metadata.get("faq")),
+        "is_faq": _coerce_bool(metadata.get("is_faq")),
+        "faq_question": _coerce_text(metadata.get("faq_question")),
+    })
     return chunk_id, source
 
 
@@ -257,14 +354,22 @@ def delete_by_source_file_in_es(source_file: str, index_name: str = ES_INDEX_NAM
     return int(response.get("deleted", 0))
 
 
-def clear_es_index(index_name: str = ES_INDEX_NAME) -> int:
+def clear_es_index(index_name: str = ES_INDEX_NAME, recreate: bool = False) -> int:
     if not ES_ENABLED:
         _warn_disabled("BM25 clear")
         return 0
 
     client = get_es_client()
     if not client.indices.exists(index=index_name):
+        if recreate:
+            ensure_index(client, index_name=index_name)
         return 0
+
+    existing_count = int(client.count(index=index_name).get("count", 0))
+
+    if recreate:
+        ensure_index(client, index_name=index_name, recreate=True)
+        return existing_count
 
     response = client.delete_by_query(
         index=index_name,
@@ -341,3 +446,57 @@ def search_bm25_documents(
         documents.append(Document(page_content=page_content, metadata=source))
 
     return documents
+
+
+def get_es_runtime_config() -> dict[str, Any]:
+    runtime: dict[str, Any] = {
+        "enabled": ES_ENABLED,
+        "configured": ES_ENABLED_CONFIGURED,
+        "url": ES_URL,
+        "available": False,
+        "analyzer_mode": "disabled" if not ES_ENABLED else "unknown",
+        "analyzer_modes_by_index": {},
+        "index_exists_by_name": {},
+        "ik_fallback_active": False,
+        "unavailable_reason": _es_unavailable_reason,
+    }
+
+    if not ES_ENABLED:
+        return runtime
+
+    try:
+        client = get_es_client()
+    except Exception as exc:
+        runtime["unavailable_reason"] = str(exc)
+        return runtime
+
+    runtime["available"] = client is not None
+    if client is None:
+        return runtime
+
+    analyzer_modes_by_index: dict[str, str] = {}
+    index_exists_by_name: dict[str, bool] = {}
+
+    for index_name in (ES_INDEX_NAME, ES_PARENT_INDEX_NAME):
+        exists = bool(client.indices.exists(index=index_name))
+        index_exists_by_name[index_name] = exists
+        if not exists:
+            continue
+
+        mapping_payload = client.indices.get_mapping(index=index_name)
+        mapping = mapping_payload.get(index_name, {}).get("mappings", {})
+        analyzer_modes_by_index[index_name] = _resolve_analyzer_mode_from_mapping(mapping)
+
+    runtime["index_exists_by_name"] = index_exists_by_name
+    runtime["analyzer_modes_by_index"] = analyzer_modes_by_index
+    runtime["ik_fallback_active"] = any(mode == "standard" for mode in analyzer_modes_by_index.values())
+
+    distinct_modes = sorted(set(analyzer_modes_by_index.values()))
+    if not distinct_modes:
+        runtime["analyzer_mode"] = "unknown"
+    elif len(distinct_modes) == 1:
+        runtime["analyzer_mode"] = distinct_modes[0]
+    else:
+        runtime["analyzer_mode"] = "mixed"
+
+    return runtime

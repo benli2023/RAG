@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$BundledEsHome = Join-Path $ProjectRoot 'elasticsearch-9.3.2'
+$BundledEsHome = Join-Path $ProjectRoot 'elasticsearch-9.1.4'
 $LogDir = Join-Path $ProjectRoot 'logs'
 $PidDir = Join-Path $ProjectRoot '.tmp'
 $PidFile = Join-Path $PidDir 'elasticsearch.pid'
@@ -111,7 +111,7 @@ Set one of the following before running this script:
   - ES_HOME=C:\path\to\elasticsearch
   - ELASTICSEARCH_BIN=C:\path\to\bin\elasticsearch.bat
 
-The bundled repository copy is expected at .\elasticsearch-9.3.2.
+The bundled repository copy is expected at .\elasticsearch-9.1.4.
 '@
   exit 1
 }

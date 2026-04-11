@@ -134,6 +134,7 @@
           { name: "Clear - Empty Index", method: "POST", path: "/clear" },
           { name: "Rebuild - Reset And Reingest", method: "POST", path: "/rebuild" },
           { name: "Stats - Chunk Statistics", method: "GET", path: "/chunks/stats" },
+          { name: "Docs - Module Directory", method: "GET", path: "/docs/module-directory" },
           {
             name: "Retrieve - Order Center",
             method: "POST",
@@ -624,6 +625,17 @@
             return runRetrieve(query);
           }
 
+          function runModuleDirectoryCase(item) {
+            return runAction(function () {
+              return callApi({
+                baseUrl: baseUrl,
+                method: item.method,
+                path: item.path,
+                body: item.body,
+              });
+            });
+          }
+
           function getSelectedSourceFile() {
             const cleaned = String(sourceFile || "").trim();
             if (!cleaned) {
@@ -710,6 +722,11 @@
           const retrieveCases = React.useMemo(function () {
             return SCRIPT_ITEMS.filter(function (item) {
               return item.path === "/retrieve";
+            });
+          }, []);
+          const moduleDirectoryCases = React.useMemo(function () {
+            return SCRIPT_ITEMS.filter(function (item) {
+              return item.path === "/docs/module-directory";
             });
           }, []);
           const availableDomains = React.useMemo(function () {
@@ -1434,7 +1451,60 @@
                               );
                             })
                           )
-                        )
+                        ),
+                        moduleDirectoryCases.length > 0
+                          ? h(
+                              React.Fragment,
+                              null,
+                              h(Divider, { sx: { my: 1.5 } }),
+                              h(Typography, { variant: "h6", sx: { mb: 1.2 } }, "文档目录测试用例"),
+                              h(
+                                Paper,
+                                { variant: "outlined", sx: { borderRadius: 3, maxHeight: 220, overflow: "auto" } },
+                                h(
+                                  List,
+                                  { dense: true, disablePadding: true },
+                                  moduleDirectoryCases.map(function (item) {
+                                    return h(
+                                      ListItemButton,
+                                      {
+                                        key: item.name,
+                                        onClick: function () {
+                                          runModuleDirectoryCase(item);
+                                        },
+                                        sx: {
+                                          borderBottom: "1px solid rgba(30,36,51,0.08)",
+                                          alignItems: "flex-start",
+                                          py: 1.1,
+                                        },
+                                      },
+                                      h(
+                                        Stack,
+                                        { spacing: 0.8, sx: { width: "100%" } },
+                                        h(
+                                          Stack,
+                                          { direction: "row", justifyContent: "space-between", alignItems: "center", gap: 1 },
+                                          h(Typography, { variant: "body2", sx: { fontWeight: 700 } }, item.name),
+                                          h(Chip, {
+                                            size: "small",
+                                            variant: "outlined",
+                                            label: item.method,
+                                          })
+                                        ),
+                                        h(Typography, {
+                                          variant: "caption",
+                                          sx: {
+                                            opacity: 0.8,
+                                            lineHeight: 1.45,
+                                          },
+                                        }, item.path)
+                                      )
+                                    );
+                                  })
+                                )
+                              )
+                            )
+                          : null
                       )
                     ),
                     h(

@@ -105,16 +105,15 @@ flowchart TD
 
 ## query_type 如何影响动态路由
 
-`query_type` 先被标准化，再映射成 `retrieval_plan`，最后决定执行模式、召回策略和召回参数。若传入值不在配置中，会回退到配置里的 `default_query_type`，当前默认是 `semantic`。
+`query_type` 先被标准化，再映射成 `retrieval_plan`，最后决定执行模式、召回策略和召回参数。未传入时会使用配置里的 `default_query_type`，当前默认是 `semantic`；若传入值不在配置中，会直接报错。
 
 ```mermaid
 flowchart TD
     A[用户传入 query_type] --> B[normalize_query_type]
     B --> C{是否在 routing config 中?}
-    C -->|否| D[回退到 default_query_type]
+    C -->|否| D[返回 unsupported query_type 错误]
     C -->|是| E[使用标准 query_type]
-    D --> F[get_retrieval_strategy_plan]
-    E --> F
+    E --> F[get_retrieval_strategy_plan]
 
     F --> G[读取 query_types 中的 query_type]
     G --> H[生成 retrieval_plan]
@@ -126,13 +125,11 @@ flowchart TD
 
     I --> N{execution_mode 是什么?}
     N -->|hybrid| O[向量召回 + BM25 召回 + RRF 融合]
-    N -->|faq_lookup| P[FAQ 专用召回]
-    N -->|sql_query| Q[结构化查询召回]
+    N -->|sql_query| P[结构化查询召回]
 
-    O --> R[可选 Reranker]
-    P --> R
-    Q --> R
-    R --> S[返回最终上下文]
+    O --> Q[可选 Reranker]
+    P --> Q
+    Q --> R[返回最终上下文]
 ```
 
 你可以把它理解成两层控制：`query_type` 负责选路由模板，`retrieval_plan` 负责把这个模板展开成具体的检索行为和参数。

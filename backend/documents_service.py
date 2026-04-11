@@ -312,8 +312,6 @@ def _build_parent_document(text_content: str, yaml_metadata: dict[str, Any], sou
     parent_metadata = yaml_metadata.copy()
     parent_metadata["source_file"] = source_file
     parent_metadata["chunk_index"] = 0
-    if summary:
-        parent_metadata["parent_summary"] = summary
     if related_domains:
         parent_metadata["related_domains"] = related_domains
     if title:

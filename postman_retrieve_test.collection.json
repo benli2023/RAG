@@ -99,6 +99,30 @@
       }
     },
     {
+      "name": "Docs - Module Directory",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{protocol}}://{{host}}:{{port}}/docs/module-directory",
+          "protocol": "{{protocol}}",
+          "host": [
+            "{{host}}"
+          ],
+          "port": "{{port}}",
+          "path": [
+            "docs",
+            "module-directory"
+          ]
+        }
+      }
+    },
+    {
       "name": "Retrieve - Order Center",
       "request": {
         "method": "POST",

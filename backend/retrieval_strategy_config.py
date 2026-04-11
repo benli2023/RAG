@@ -104,19 +104,6 @@ def _build_default_query_types() -> dict[str, dict[str, Any]]:
             "bm25_weight": 1.6,
             "enabled": True,
         },
-        "faq_lookup": {
-            "key": "faq_lookup",
-            "label": "FAQ 查询",
-            "router_description": "FAQ 查询，适合标准问答、固定话术、常见问题和明确的标准答案。",
-            "execution_mode": "faq_lookup",
-            "strategy": "faq-only",
-            "vector_k": max(10, VECTOR_RECALL_K // 2),
-            "bm25_k": max(BM25_RECALL_K, 20),
-            "fusion_top_k": min(FUSION_TOP_K, 8),
-            "vector_weight": 1.2,
-            "bm25_weight": 1.8,
-            "enabled": True,
-        },
         "sql_query": {
             "key": "sql_query",
             "label": "结构化查询",
@@ -241,12 +228,21 @@ def get_default_query_type() -> str:
     return str(config["default_query_type"])
 
 
+def get_supported_query_types() -> list[str]:
+    config = _load_routing_config()
+    return list(config["query_types"].keys())
+
+
 def normalize_query_type(query_type: str | None) -> str:
     config = _load_routing_config()
     normalized = str(query_type or "").strip().lower()
+    if not normalized:
+        return str(config["default_query_type"])
     if normalized in config["query_types"]:
         return normalized
-    return str(config["default_query_type"])
+
+    supported_values = ", ".join(config["query_types"].keys())
+    raise ValueError(f"unsupported query_type: {normalized}. supported values: {supported_values}")
 
 
 def get_retrieval_strategy_plan(query_type: str | None) -> dict[str, Any]:

@@ -8,7 +8,7 @@ from langchain_core.documents import Document
 from access_control import build_source_file_filter, dedupe_values, load_document_access_manifest, normalize_username, resolve_accessible_sources
 from context_compression_service import compress_context
 from es_service import search_bm25_documents
-from faq_support import is_faq_document, rank_results_for_generation
+from faq_support import rank_results_for_generation
 from hybrid_retrieval_service import reciprocal_rank_fusion
 from rag_config import BM25_RECALL_K, CONTEXT_COMPRESSION_ENABLED, CONTEXT_COMPRESSION_MIN_CHARS, CONTEXT_COMPRESSION_SENTENCE_K, DOCS_DIR, ENABLE_ACL, ENABLE_PARENT_CHILD_RETRIEVAL, FINAL_CONTEXT_K, FUSION_TOP_K, PARENT_RECALL_K, RERANKER_ENABLED, RRF_K, ES_INDEX_NAME, ES_PARENT_INDEX_NAME, USERNAME_GROUP_MAPPING_FILE, VECTOR_RECALL_K
 from rag_store import parent_vectorstore, vectorstore
@@ -206,8 +206,23 @@ def _extract_source_files(documents: list[Document]) -> list[str]:
     return dedupe_values(source_files)
 
 
-def _filter_faq_documents(documents: list[Document]) -> list[Document]:
-    return [doc for doc in documents if is_faq_document(doc.metadata)]
+def _dedupe_documents_by_source_file(documents: list[Document]) -> list[Document]:
+    deduped_documents: list[Document] = []
+    seen_source_files: set[str] = set()
+
+    for doc in documents:
+        source_file = str(doc.metadata.get("source_file", "")).strip()
+        if not source_file:
+            deduped_documents.append(doc)
+            continue
+
+        if source_file in seen_source_files:
+            continue
+
+        seen_source_files.add(source_file)
+        deduped_documents.append(doc)
+
+    return deduped_documents
 
 
 def _is_sql_query_candidate(query: str) -> bool:
@@ -283,41 +298,42 @@ def _resolve_sql_source_files(source_files: list[str], domains: list[str], query
     return dedupe_values(source_files)
 
 
-def _resolve_faq_source_files(source_files: list[str], domains: list[str]) -> list[str]:
-    if not source_files and not domains:
-        return []
-
-    source_file_set = set(dedupe_values(source_files)) if source_files else None
-    domain_set = set(dedupe_values(domains)) if domains else None
-    collection = vectorstore._collection
-    records = collection.get(include=["metadatas"])
-    metadatas = records.get("metadatas", [])
-
-    faq_source_files: list[str] = []
-    for metadata in metadatas:
-        if not isinstance(metadata, dict):
-            continue
-        if not is_faq_document(metadata):
-            continue
-
-        source_file = str(metadata.get("source_file", "")).strip()
-        domain = str(metadata.get("domain", "")).strip()
-        if not source_file:
-            continue
-        if source_file_set is not None and source_file not in source_file_set:
-            continue
-        if domain_set is not None and domain not in domain_set:
-            continue
-        faq_source_files.append(source_file)
-
-    return dedupe_values(faq_source_files)
-
-
 def _collection_count(resolved_vectorstore) -> int:
     try:
         return int(resolved_vectorstore._collection.count())
     except Exception:
         return 0
+
+
+def _run_child_recall(
+    query: str,
+    retrieval_plan: dict[str, Any],
+    source_files: list[str],
+    domains: list[str],
+    filter_value: dict | None,
+) -> tuple[list[Document], list[Document], list[Document]]:
+    if filter_value is not None:
+        vector_results = vectorstore.similarity_search(query, k=int(retrieval_plan["vector_k"]), filter=filter_value)
+    else:
+        vector_results = vectorstore.similarity_search(query, k=int(retrieval_plan["vector_k"]))
+
+    bm25_results = search_bm25_documents(
+        query=query,
+        source_files=source_files or None,
+        domains=domains or None,
+        index_name=ES_INDEX_NAME,
+        limit=int(retrieval_plan["bm25_k"]),
+    )
+
+    fused_results = reciprocal_rank_fusion(
+        vector_results,
+        bm25_results,
+        k=RRF_K,
+        vector_weight=float(retrieval_plan["vector_weight"]),
+        bm25_weight=float(retrieval_plan["bm25_weight"]),
+    )[: int(retrieval_plan["fusion_top_k"])]
+
+    return vector_results, bm25_results, fused_results
 
 
 def _build_observability_payload(
@@ -365,8 +381,9 @@ def run_retrieval_pipeline(query: str, username: str, domains: list[str] | None 
     normalized_requested_domains = dedupe_values(domains or [])
     normalized_query_type = normalize_query_type(query_type)
     retrieval_plan = get_retrieval_strategy_plan(normalized_query_type)
+    requested_strategy = str(retrieval_plan.get("strategy", "unknown"))
     requested_execution_mode = str(retrieval_plan.get("execution_mode", "hybrid")).strip() or "hybrid"
-    supported_execution_modes = {"hybrid", "faq_lookup", "sql_query"}
+    supported_execution_modes = {"hybrid", "sql_query"}
     resolved_execution_mode = requested_execution_mode if requested_execution_mode in supported_execution_modes else "hybrid"
     
     if resolved_execution_mode == "hybrid" and _is_sql_query_candidate(normalized_query):
@@ -460,6 +477,18 @@ def run_retrieval_pipeline(query: str, username: str, domains: list[str] | None 
             index_name=ES_PARENT_INDEX_NAME,
             limit=PARENT_RECALL_K,
         )
+
+        raw_parent_vector_hit_count = len(parent_vector_results)
+        raw_parent_bm25_hit_count = len(parent_bm25_results)
+        parent_vector_results = _dedupe_documents_by_source_file(parent_vector_results)
+        parent_bm25_results = _dedupe_documents_by_source_file(parent_bm25_results)
+        if len(parent_vector_results) != raw_parent_vector_hit_count or len(parent_bm25_results) != raw_parent_bm25_hit_count:
+            print(
+                f"INFO: 阶段一按 source_file 去重，"
+                f"parent_vector_hits={raw_parent_vector_hit_count}->{len(parent_vector_results)}, "
+                f"parent_bm25_hits={raw_parent_bm25_hit_count}->{len(parent_bm25_results)}"
+            )
+
         parent_results = reciprocal_rank_fusion(parent_vector_results, parent_bm25_results, k=RRF_K)[:PARENT_RECALL_K]
 
         if parent_results:
@@ -525,49 +554,7 @@ def run_retrieval_pipeline(query: str, username: str, domains: list[str] | None 
 
     child_filter_value = build_source_file_filter(narrowed_source_files) if narrowed_source_files else filter_value
 
-    if resolved_execution_mode == "faq_lookup":
-        faq_source_files = _resolve_faq_source_files(
-            narrowed_source_files or requested_scope_source_files,
-            narrowed_domains or effective_authorized_domains or normalized_requested_domains,
-        )
-        faq_filter_value = build_source_file_filter(faq_source_files) if faq_source_files else child_filter_value
-        print(
-            f"INFO: 执行 FAQ 专用召回，parent_enabled={ENABLE_PARENT_CHILD_RETRIEVAL}, parent_k={PARENT_RECALL_K}, "
-            f"two_stage_applied={two_stage_applied}, query_type={normalized_query_type}, strategy={retrieval_plan['strategy']}, "
-            f"requested_execution_mode={requested_execution_mode}, execution_mode={resolved_execution_mode}, "
-            f"vector_k={retrieval_plan['vector_k']}, bm25_k={retrieval_plan['bm25_k']}, "
-            f"vector_weight={retrieval_plan['vector_weight']}, bm25_weight={retrieval_plan['bm25_weight']}, "
-            f"fusion_top_k={retrieval_plan['fusion_top_k']}, final_top_k={FINAL_CONTEXT_K}, "
-            f"target_files={len(faq_source_files) if faq_source_files else len(narrowed_source_files)}, target_domains={narrowed_domains}, filter={faq_filter_value}"
-        )
-
-        if faq_filter_value is not None:
-            vector_results = vectorstore.similarity_search(normalized_query, k=int(retrieval_plan["vector_k"]), filter=faq_filter_value)
-        else:
-            vector_results = vectorstore.similarity_search(normalized_query, k=int(retrieval_plan["vector_k"]))
-        vector_results = _filter_faq_documents(vector_results)
-
-        bm25_results = search_bm25_documents(
-            query=normalized_query,
-            source_files=faq_source_files or narrowed_source_files or requested_scope_source_files or None,
-            domains=narrowed_domains or None,
-            faq_only=True,
-            index_name=ES_INDEX_NAME,
-            limit=int(retrieval_plan["bm25_k"]),
-        )
-        bm25_results = _filter_faq_documents(bm25_results)
-
-        print(f"INFO: FAQ 专用召回完成，vector_hits={len(vector_results)}, bm25_hits={len(bm25_results)}")
-
-        fused_results = reciprocal_rank_fusion(
-            vector_results,
-            bm25_results,
-            k=RRF_K,
-            vector_weight=float(retrieval_plan["vector_weight"]),
-            bm25_weight=float(retrieval_plan["bm25_weight"]),
-        )[: int(retrieval_plan["fusion_top_k"])]
-        print(f"INFO: FAQ 专用 RRF 融合完成，fused_hits={len(fused_results)}")
-    elif resolved_execution_mode == "sql_query":
+    if resolved_execution_mode == "sql_query":
         sql_source_files = _resolve_sql_source_files(
             narrowed_source_files or requested_scope_source_files,
             narrowed_domains or effective_authorized_domains or normalized_requested_domains,
@@ -585,28 +572,15 @@ def run_retrieval_pipeline(query: str, username: str, domains: list[str] | None 
             f"target_files={len(sql_target_source_files)}, target_domains={narrowed_domains}, filter={sql_filter_value}"
         )
 
-        if sql_filter_value is not None:
-            vector_results = vectorstore.similarity_search(normalized_query, k=int(retrieval_plan["vector_k"]), filter=sql_filter_value)
-        else:
-            vector_results = vectorstore.similarity_search(normalized_query, k=int(retrieval_plan["vector_k"]))
-
-        bm25_results = search_bm25_documents(
+        vector_results, bm25_results, fused_results = _run_child_recall(
             query=normalized_query,
-            source_files=sql_target_source_files or narrowed_source_files or requested_scope_source_files or None,
-            domains=narrowed_domains or None,
-            index_name=ES_INDEX_NAME,
-            limit=int(retrieval_plan["bm25_k"]),
+            retrieval_plan=retrieval_plan,
+            source_files=sql_target_source_files or narrowed_source_files or requested_scope_source_files,
+            domains=narrowed_domains or effective_authorized_domains or normalized_requested_domains,
+            filter_value=sql_filter_value,
         )
 
         print(f"INFO: 结构化查询召回完成，vector_hits={len(vector_results)}, bm25_hits={len(bm25_results)}")
-
-        fused_results = reciprocal_rank_fusion(
-            vector_results,
-            bm25_results,
-            k=RRF_K,
-            vector_weight=float(retrieval_plan["vector_weight"]),
-            bm25_weight=float(retrieval_plan["bm25_weight"]),
-        )[: int(retrieval_plan["fusion_top_k"])]
         print(f"INFO: 结构化查询 RRF 融合完成，fused_hits={len(fused_results)}")
     else:
         print(
@@ -619,28 +593,15 @@ def run_retrieval_pipeline(query: str, username: str, domains: list[str] | None 
             f"reranker_enabled={RERANKER_ENABLED}, target_files={len(narrowed_source_files)}, target_domains={narrowed_domains}, filter={child_filter_value}"
         )
 
-        if child_filter_value is not None:
-            vector_results = vectorstore.similarity_search(normalized_query, k=int(retrieval_plan["vector_k"]), filter=child_filter_value)
-        else:
-            vector_results = vectorstore.similarity_search(normalized_query, k=int(retrieval_plan["vector_k"]))
-
-        bm25_results = search_bm25_documents(
+        vector_results, bm25_results, fused_results = _run_child_recall(
             query=normalized_query,
-            source_files=narrowed_source_files or requested_scope_source_files or None,
-            domains=narrowed_domains or None,
-            index_name=ES_INDEX_NAME,
-            limit=int(retrieval_plan["bm25_k"]),
+            retrieval_plan=retrieval_plan,
+            source_files=narrowed_source_files or requested_scope_source_files,
+            domains=narrowed_domains or effective_authorized_domains or normalized_requested_domains,
+            filter_value=child_filter_value,
         )
 
         print(f"INFO: 混合召回完成，vector_hits={len(vector_results)}, bm25_hits={len(bm25_results)}")
-
-        fused_results = reciprocal_rank_fusion(
-            vector_results,
-            bm25_results,
-            k=RRF_K,
-            vector_weight=float(retrieval_plan["vector_weight"]),
-            bm25_weight=float(retrieval_plan["bm25_weight"]),
-        )[: int(retrieval_plan["fusion_top_k"])]
         print(f"INFO: RRF 融合完成，fused_hits={len(fused_results)}")
 
     reranked_results = rank_results_for_generation(normalized_query, rerank_documents(normalized_query, fused_results))
@@ -692,6 +653,7 @@ def run_retrieval_pipeline(query: str, username: str, domains: list[str] | None 
         "shared_fused_hit_count": sum(1 for doc in fused_results if len(doc.metadata.get("retrieval_sources", [])) > 1),
         "query_type": normalized_query_type,
         "strategy": retrieval_plan["strategy"],
+        "requested_strategy": requested_strategy,
         "requested_execution_mode": requested_execution_mode,
         "execution_mode": resolved_execution_mode,
         "vector_weight": retrieval_plan["vector_weight"],
@@ -715,6 +677,7 @@ def run_retrieval_pipeline(query: str, username: str, domains: list[str] | None 
         requested_execution_mode=requested_execution_mode,
         resolved_execution_mode=resolved_execution_mode,
     )
+    diagnostics["requested_strategy"] = requested_strategy
 
     context = [
         build_context_entry(index, doc.metadata, doc.page_content)

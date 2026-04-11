@@ -111,7 +111,7 @@
 
 当前版本已经具备真正的“LLM as Router”控制面，但仍有几个自然延展点：
 
-1. 将 `query_type` 扩展为可插拔枚举，例如 `sql_query`、`faq_lookup`、`code_lookup`。
+1. 将 `query_type` 扩展为可插拔枚举，例如 `sql_query`、`code_lookup`。
 2. 将动态策略配置化，而不是写死在 Python 中。
 3. 将 trace 输出给前端诊断面板，形成可观测化工作台。
 4. 对 Router 结果做缓存，降低重复问题的首跳成本。

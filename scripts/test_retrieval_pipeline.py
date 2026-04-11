@@ -31,6 +31,8 @@ class EvaluationCase:
     name: str
     query: str
     username: str = "anonymous"
+    domains: list[str] = field(default_factory=list)
+    query_type: str = "semantic"
     expected_status: str = "success"
     expected_routed_domains: list[str] = field(default_factory=list)
     expected_keywords: list[str] = field(default_factory=list)
@@ -82,6 +84,16 @@ def _build_default_cases() -> list[EvaluationCase]:
             require_bm25_hits=True,
             min_shared_fused_hits=1,
         ),
+        EvaluationCase(
+            name="login-permission-troubleshooting",
+            query="用户登录失败，怎么排查权限问题？",
+            domains=["user-center", "global"],
+            query_type="semantic",
+            expected_routed_domains=["user-center"],
+            expected_keywords=["登录", "access_token", "refresh_token"],
+            require_bm25_hits=True,
+            min_shared_fused_hits=1,
+        ),
     ]
 
 
@@ -112,6 +124,8 @@ def _load_cases(case_file: str | None, query: str | None, username: str) -> list
                 name=str(item.get("name") or f"case-{index + 1}"),
                 query=str(item["query"]),
                 username=str(item.get("username", username)),
+                domains=list(item.get("domains", [])),
+                query_type=str(item.get("query_type", "semantic")),
                 expected_status=str(item.get("expected_status", "success")),
                 expected_routed_domains=list(item.get("expected_routed_domains", item.get("expected_authorized_domains", []))),
                 expected_keywords=list(item.get("expected_keywords", [])),
@@ -200,6 +214,8 @@ def _evaluate_case(case: EvaluationCase) -> dict[str, Any]:
     pipeline_result = run_retrieval_pipeline(
         query=case.query,
         username=case.username,
+        domains=case.domains,
+        query_type=case.query_type,
     )
     response = pipeline_result["response"]
     trace = pipeline_result["trace"]
@@ -211,10 +227,13 @@ def _evaluate_case(case: EvaluationCase) -> dict[str, Any]:
     matched_keywords = [keyword for keyword in case.expected_keywords if keyword.lower() in context_text.lower()]
     observed_final_domains = sorted({str(doc.metadata.get("domain", "unknown")) for doc in trace["final_results"]})
     routed_domains = response.get("routed_domains", [])
+    expanded_routed_domains = response.get("expanded_routed_domains", [])
+    routed_domain_check_field = "expanded_routed_domains" if len(case.expected_routed_domains) > 1 else "routed_domains"
+    routed_domain_candidates = expanded_routed_domains if routed_domain_check_field == "expanded_routed_domains" else routed_domains
 
     checks = {
         "status": status == case.expected_status,
-        "routed_domains": set(case.expected_routed_domains).issubset(set(routed_domains)),
+        "routed_domains": set(case.expected_routed_domains).issubset(set(routed_domain_candidates)),
         "context_non_empty": (len(context_entries) > 0) if case.require_non_empty_context else True,
         "bm25_hits": trace["metrics"]["bm25_hit_count"] > 0 if case.require_bm25_hits else True,
         "shared_fusion": trace["metrics"]["shared_fused_hit_count"] >= case.min_shared_fused_hits,
@@ -233,6 +252,8 @@ def _evaluate_case(case: EvaluationCase) -> dict[str, Any]:
         "matched_keywords": matched_keywords,
         "missing_keywords": [keyword for keyword in case.expected_keywords if keyword not in matched_keywords],
         "routed_domains": routed_domains,
+        "expanded_routed_domains": expanded_routed_domains,
+        "routed_domain_check_field": routed_domain_check_field,
         "authorized_domains": response.get("authorized_domains", []),
         "observed_final_domains": observed_final_domains,
         "metrics": trace["metrics"],
@@ -288,7 +309,11 @@ def _print_human_report(index_health: dict[str, Any], results: list[dict[str, An
         compression = metrics["compression"]
         print(f"=== Case: {result['name']} ===")
         print(f"status={'PASS' if result['passed'] else 'FAIL'} query={result['query']}")
-        print(f"routed_domains={result['routed_domains']} authorized_domains={result['authorized_domains']} observed_final_domains={result['observed_final_domains']}")
+        print(
+            f"routed_domains={result['routed_domains']} expanded_routed_domains={result.get('expanded_routed_domains', [])} "
+            f"routed_domain_check_field={result.get('routed_domain_check_field', 'routed_domains')} "
+            f"authorized_domains={result['authorized_domains']} observed_final_domains={result['observed_final_domains']}"
+        )
         print(
             "stage_hits="
             f"parent={metrics.get('parent_hit_count', 0)} "

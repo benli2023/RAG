@@ -49,18 +49,6 @@
       "bm25_weight": 1.6,
       "enabled": true
     },
-    "faq_lookup": {
-      "label": "FAQ 查询",
-      "router_description": "FAQ 查询，适合标准问答、固定话术、常见问题和明确的标准答案。",
-      "execution_mode": "faq_lookup",
-      "strategy": "faq-only",
-      "vector_k": 10,
-      "bm25_k": 20,
-      "fusion_top_k": 8,
-      "vector_weight": 1.2,
-      "bm25_weight": 1.8,
-      "enabled": true
-    },
     "sql_query": {
       "label": "结构化查询",
       "router_description": "结构化查询，适合数据库字段、表结构、接口字段和强结构化参考信息。",

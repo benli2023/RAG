@@ -4,17 +4,17 @@ from pathlib import Path
 
 import frontmatter
 import yaml
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from access_control import ANONYMOUS_USERNAME
 from api_models import QueryRequest, SourceFileRequest
 from documents_service import assert_document_access, build_index_documents, list_docs_markdown_files, normalize_docs_relative_path
-from es_service import clear_es_index, delete_by_source_file_in_es, upsert_chunks_to_es
+from es_service import clear_es_index, delete_by_source_file_in_es, get_es_runtime_config, upsert_chunks_to_es
 from rag_config import DASHBOARD_DIR, DASHBOARD_INDEX, DOCS_DIR, ENABLE_ACL, ENABLE_PARENT_CHILD_RETRIEVAL, ENABLE_SUB_CHUNKING, ES_INDEX_NAME, ES_PARENT_INDEX_NAME, get_runtime_config
 from rag_store import embedding_function, parent_vectorstore, vectorstore
 from retrieval_pipeline_service import run_retrieval_pipeline
-from retrieval_strategy_config import get_routing_runtime_config
+from retrieval_strategy_config import get_routing_runtime_config, normalize_query_type
 from vectorstore_service import clear_vectorstore, delete_by_source_file, get_chunk_statistics, get_grouped_source_files_from_vectorstore, upsert_chunks
 
 app = FastAPI()
@@ -121,8 +121,8 @@ def ingest_docs():
 def clear_index():
     deleted_parent_count = clear_vectorstore(parent_vectorstore)
     deleted_vector_count = clear_vectorstore(vectorstore)
-    deleted_parent_es_count = clear_es_index(index_name=ES_PARENT_INDEX_NAME)
-    deleted_es_count = clear_es_index(index_name=ES_INDEX_NAME)
+    deleted_parent_es_count = clear_es_index(index_name=ES_PARENT_INDEX_NAME, recreate=True)
+    deleted_es_count = clear_es_index(index_name=ES_INDEX_NAME, recreate=True)
     return {
         "message": f"已清空检索索引，父文档索引删除 {deleted_parent_count} 条，子切片向量库删除 {deleted_vector_count} 条，父 BM25 索引删除 {deleted_parent_es_count} 条，子 BM25 索引删除 {deleted_es_count} 条。",
         "deleted_count": deleted_vector_count,
@@ -137,8 +137,8 @@ def clear_index():
 def rebuild_index():
     deleted_parent_count = clear_vectorstore(parent_vectorstore)
     deleted_vector_count = clear_vectorstore(vectorstore)
-    deleted_parent_es_count = clear_es_index(index_name=ES_PARENT_INDEX_NAME)
-    deleted_es_count = clear_es_index(index_name=ES_INDEX_NAME)
+    deleted_parent_es_count = clear_es_index(index_name=ES_PARENT_INDEX_NAME, recreate=True)
+    deleted_es_count = clear_es_index(index_name=ES_INDEX_NAME, recreate=True)
     ingest_result = ingest_docs()
     return {
         "message": "索引已重建完成。",
@@ -160,6 +160,7 @@ def get_chunk_stats():
 def get_config():
     runtime_config = get_runtime_config()
     runtime_config["routing"] = get_routing_runtime_config()
+    runtime_config["indexing"]["es_runtime"] = get_es_runtime_config()
     return runtime_config
 
 
@@ -284,14 +285,19 @@ def update_document_chunks(req: SourceFileRequest):
 
 @app.post("/retrieve")
 def retrieve_context(req: QueryRequest):
-    pipeline_result = run_retrieval_pipeline(
-        query=req.query,
-        username=req.username,
-        domains=req.domains,
-        query_type=req.query_type,
-    )
+    try:
+        normalize_query_type(req.query_type)
+        pipeline_result = run_retrieval_pipeline(
+            query=req.query,
+            username=req.username,
+            domains=req.domains,
+            query_type=req.query_type,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     return pipeline_result["response"]
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
