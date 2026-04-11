@@ -130,7 +130,7 @@ RRF_K = max(1, _get_int_config("RRF_K", 60))
 # 是否启用父子双层索引的两阶段检索
 ENABLE_PARENT_CHILD_RETRIEVAL = _get_bool_config("ENABLE_PARENT_CHILD_RETRIEVAL", True)
 # 阶段一父文档召回数量
-PARENT_RECALL_K = max(1, _get_int_config("PARENT_RECALL_K", 5))
+PARENT_RECALL_K = max(1, _get_int_config("PARENT_RECALL_K", 15))
 # 是否启用上下文压缩
 CONTEXT_COMPRESSION_ENABLED = _get_bool_config("CONTEXT_COMPRESSION_ENABLED", True)
 # 触发上下文压缩的最小文本长度（字符数）

@@ -75,6 +75,8 @@ def _extract_primary_domains(documents: list[Document], fallback_source_files: l
 
 
 def _should_expand_related_domains(documents: list[Document]) -> bool:
+    if not documents:
+        return False
     for doc in documents:
         domain = str(doc.metadata.get("domain", "")).strip()
         related_domains = _coerce_metadata_list(doc.metadata.get("related_domains"))
@@ -210,13 +212,19 @@ def _filter_faq_documents(documents: list[Document]) -> list[Document]:
 
 def _is_sql_query_candidate(query: str) -> bool:
     normalized_query = query.lower()
-    sql_markers = (
+    strong_markers = (
         "sql",
         "select",
         "from",
         "where",
-        "table",
-        "数据库字段",
+        "group by",
+        "order by",
+    )
+    if any(marker in normalized_query for marker in strong_markers):
+        return True
+
+    weak_markers = (
+        "数据库",
         "表",
         "字段",
         "列",
@@ -224,51 +232,55 @@ def _is_sql_query_candidate(query: str) -> bool:
         "索引",
         "枚举",
         "状态字典",
-        "接口参数",
+        "接口",
+        "参数",
         "请求参数",
         "返回字段",
+        "格式",
+        "明文",
     )
-    return any(marker in normalized_query for marker in sql_markers)
+    matched_weak = sum(1 for marker in weak_markers if marker in normalized_query)
+    return matched_weak >= 3
 
 
 def _resolve_sql_source_files(source_files: list[str], domains: list[str], query: str) -> list[str]:
-    normalized_source_files = dedupe_values(source_files)
-    normalized_domains = dedupe_values(domains)
-    source_file_set = set(normalized_source_files) if normalized_source_files else None
-    domain_set = set(normalized_domains) if normalized_domains else None
-    query_lower = query.lower()
+    if not source_files and not domains:
+        return []
 
-    prefer_reference_db = any(marker in query_lower for marker in ("数据库", "表", "字段", "列", "主键", "索引", "sql", "select", "from", "where"))
-    prefer_reference_api = any(marker in query_lower for marker in ("接口", "api", "请求", "返回", "参数", "token", "登录", "认证"))
+    source_file_set = set(dedupe_values(source_files)) if source_files else None
+    domain_set = set(dedupe_values(domains)) if domains else None
 
-    if prefer_reference_db and prefer_reference_api:
-        preferred_suffixes = {"reference-db.md", "reference-api.md"}
-    elif prefer_reference_db:
-        preferred_suffixes = {"reference-db.md"}
-    elif prefer_reference_api:
-        preferred_suffixes = {"reference-api.md"}
-    else:
-        preferred_suffixes = {"reference-db.md", "reference-api.md"}
+    try:
+        collection = vectorstore._collection
+        records = collection.get(include=["metadatas"])
+        metadatas = records.get("metadatas", [])
+    except Exception:
+        return dedupe_values(source_files)
 
-    manifest = load_document_access_manifest(DOCS_DIR)
     structured_source_files: list[str] = []
-    for entry in manifest:
-        source_file = str(entry["source_file"]).strip()
-        domain = str(entry["domain"]).strip()
+    for metadata in metadatas:
+        if not isinstance(metadata, dict):
+            continue
+        
+        doc_type = str(metadata.get("type", "")).strip().lower()
+        if doc_type != "reference":
+            continue
+
+        source_file = str(metadata.get("source_file", "")).strip()
+        domain = str(metadata.get("domain", "")).strip()
         if not source_file:
             continue
         if source_file_set is not None and source_file not in source_file_set:
             continue
         if domain_set is not None and domain not in domain_set:
             continue
-        if not any(source_file.endswith(suffix) for suffix in preferred_suffixes):
-            continue
+        
         structured_source_files.append(source_file)
 
     if structured_source_files:
         return dedupe_values(structured_source_files)
 
-    return normalized_source_files
+    return dedupe_values(source_files)
 
 
 def _resolve_faq_source_files(source_files: list[str], domains: list[str]) -> list[str]:

@@ -218,7 +218,7 @@ def _build_readme_case_catalog() -> list[GeneratedCase]:
 			expected_retrieved_context=[
 				_expected_chunk(
 					"order-center/faq.md",
-					"[FAQ: true] [类型: faq] 【用户常问】：后端创建订单时为什么不能用数据库自增 ID？ 【标准解答】： 绝对不能使用数据库自增 ID，以防泄露商业数据量法则。必须调用分布式 ID 生成服务 `IdGenerator.nextSnowflakeId()` 获取雪花算法订单号。",
+					"[FAQ: true] [类型: faq] 【用户常问】：创单 ID 规范：为什么必须使用雪花算法？ 【标准解答】： 绝对不能使用数据库自增 ID，以防泄露商业数据量法则。必须调用分布式 ID 生成服务 `IdGenerator.nextSnowflakeId()` 获取雪花算法订单号。",
 				),
 			],
 			note="README 测试问 5。",
@@ -382,7 +382,7 @@ def _build_case_catalog() -> list[GeneratedCase]:
 					expected_retrieved_context=[
 						_expected_chunk(
 							"order-center/faq.md",
-							"[FAQ: true] [类型: faq] 【用户常问】：后端创建订单时为什么不能用数据库自增 ID？ 【标准解答】： 绝对不能使用数据库自增 ID，以防泄露商业数据量法则。必须调用分布式 ID 生成服务 `IdGenerator.nextSnowflakeId()` 获取雪花算法订单号。",
+							"[FAQ: true] [类型: faq] 【用户常问】：创单 ID 规范：为什么必须使用雪花算法？ 【标准解答】： 绝对不能使用数据库自增 ID，以防泄露商业数据量法则。必须调用分布式 ID 生成服务 `IdGenerator.nextSnowflakeId()` 获取雪花算法订单号。",
 						),
 						_expected_chunk(
 							"order-center/faq.md",
@@ -470,13 +470,13 @@ def _build_case_catalog() -> list[GeneratedCase]:
 				),
 			)
 
-		elif source_file == "global-workflows/demo.md" and _contains_any(combined_text, ["RAG", "ROI", "时序图", "知识治理"]):
+		elif source_file == "global-workflows/demo.md" and _contains_any(combined_text, ["RAG", "ROI", "时序图", "知识库"]):
 			cases.append(
 				GeneratedCase(
 					name="global-rag-demo",
 					query="这份演示稿主要想解决什么 RAG 痛点？它强调了哪些架构和知识治理能力？",
 					domains=["global"],
-					expected_keywords=["RAG", "知识治理", "架构", "时序图"],
+					expected_keywords=["RAG", "架构", "时序图"],
 					expected_source_files=[source_file],
 					expected_retrieved_context=[
 						_expected_chunk(

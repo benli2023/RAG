@@ -19,6 +19,18 @@ _es_unavailable_reason: str | None = None
 _es_disabled_warned = False
 
 _INDEX_BODY = {
+    "settings": {
+        "analysis": {
+            "analyzer": {
+                "default": {
+                    "type": "ik_max_word"
+                },
+                "default_search": {
+                    "type": "ik_smart"
+                }
+            }
+        }
+    },
     "mappings": {
         "dynamic": True,
         "properties": {
@@ -26,15 +38,17 @@ _INDEX_BODY = {
             "source_file": {"type": "keyword"},
             "domain": {"type": "keyword"},
             "type": {"type": "keyword"},
-            "content": {"type": "text"},
-            "header_text": {"type": "text"},
-            "summary": {"type": "text"},
-            "keywords_text": {"type": "text"},
-            "parent_title": {"type": "text"},
+            "content": {"type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart"},
+            "header_text": {"type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart"},
+            "summary": {"type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart"},
+            "keywords_text": {"type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart"},
+            "sections_text": {"type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart"},
+            "related_domains_text": {"type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart"},
+            "parent_title": {"type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart"},
             "chunk_index": {"type": "integer"},
             "is_faq": {"type": "boolean"},
             "faq": {"type": "boolean"},
-            "faq_question": {"type": "text"},
+            "faq_question": {"type": "text", "analyzer": "ik_max_word", "search_analyzer": "ik_smart"},
         },
     }
 }
@@ -44,10 +58,24 @@ def _coerce_text(value: Any) -> str:
     return str(value).strip() if value not in (None, "") else ""
 
 
-def _coerce_keywords_text(value: Any) -> str:
+def _coerce_list_to_text(value: Any) -> str:
     if isinstance(value, list):
         return " ".join(str(item).strip() for item in value if str(item).strip())
     return _coerce_text(value)
+
+
+def _coerce_sections_text(value: Any) -> str:
+    if not isinstance(value, list):
+        return ""
+    titles: list[str] = []
+    for item in value:
+        if isinstance(item, dict):
+            title = str(item.get("title", "")).strip()
+        else:
+            title = str(item).strip()
+        if title:
+            titles.append(title)
+    return " ".join(titles)
 
 
 def _build_header_text(metadata: dict[str, Any]) -> str:
@@ -133,13 +161,21 @@ def _build_es_source(doc: Document) -> tuple[str, dict[str, Any]]:
     metadata = sanitize_metadata(doc.metadata)
     chunk_index = int(metadata.get("chunk_index", 1))
     chunk_id = build_chunk_id(metadata, chunk_index, doc.page_content)
+
+    # Build sections_text from the original (pre-sanitized) metadata to handle
+    # list-of-dict structures that sanitize_metadata may have JSON-encoded.
+    raw_sections = doc.metadata.get("sections") if doc.metadata else None
+    sections_text = _coerce_sections_text(raw_sections)
+
     source = {
         **metadata,
         "chunk_id": chunk_id,
         "content": doc.page_content,
         "header_text": _build_header_text(metadata),
         "summary": _coerce_text(metadata.get("summary") or metadata.get("description")),
-        "keywords_text": _coerce_keywords_text(metadata.get("keywords")),
+        "keywords_text": _coerce_list_to_text(metadata.get("keywords")),
+        "sections_text": sections_text,
+        "related_domains_text": _coerce_list_to_text(metadata.get("related_domains")),
         "parent_title": _coerce_text(metadata.get("parent_title")),
     }
     return chunk_id, source
@@ -278,7 +314,9 @@ def search_bm25_documents(
                                 "header_text^3",
                                 "faq_question^3",
                                 "summary^2",
-                                "keywords_text^2",
+                                "keywords_text^3",
+                                "sections_text^2",
+                                "related_domains_text",
                                 "parent_title^2",
                             ],
                         }

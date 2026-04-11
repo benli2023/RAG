@@ -282,7 +282,30 @@ def _extract_related_domains(text_content: str, yaml_metadata: dict[str, Any], s
 def _build_parent_document(text_content: str, yaml_metadata: dict[str, Any], source_file: str) -> Document | None:
     title = str(yaml_metadata.get("title") or extract_markdown_title(text_content) or Path(source_file).stem).strip()
     summary = _normalize_metadata_text(yaml_metadata.get("summary") or yaml_metadata.get("description"))
-    if not summary:
+
+    sections = yaml_metadata.get("sections")
+    first_section_title = ""
+    if isinstance(sections, list) and len(sections) > 0 and isinstance(sections[0], dict):
+        first_section_title = _normalize_metadata_text(sections[0].get("title", ""))
+
+    keywords = yaml_metadata.get("keywords")
+    keywords_text = ""
+    if isinstance(keywords, list):
+        keywords_text = ", ".join([str(k) for k in keywords])
+    elif isinstance(keywords, str):
+        keywords_text = keywords
+
+    content_parts = []
+    if summary:
+        content_parts.append(f"Summary: {summary}")
+    if keywords_text:
+        content_parts.append(f"Keywords: {keywords_text}")
+    if first_section_title:
+        content_parts.append(f"Primary Section: {first_section_title}")
+
+    page_content = "\n".join(content_parts)
+
+    if not summary and not page_content:
         return None
 
     related_domains = _extract_related_domains(text_content, yaml_metadata, source_file)
@@ -296,7 +319,7 @@ def _build_parent_document(text_content: str, yaml_metadata: dict[str, Any], sou
     if title:
         parent_metadata["parent_title"] = title
 
-    return Document(page_content=summary, metadata=parent_metadata)
+    return Document(page_content=page_content if page_content else summary, metadata=parent_metadata)
 
 
 def _build_child_documents(text_content: str, yaml_metadata: dict[str, Any], source_file: str) -> List[Document]:
@@ -344,18 +367,7 @@ def _build_child_documents(text_content: str, yaml_metadata: dict[str, Any], sou
 
         protected_content, placeholders = _protect_fenced_blocks(chunk.page_content)
         
-        summary = _normalize_metadata_text(yaml_metadata.get("summary") or yaml_metadata.get("description"))
-        keywords = yaml_metadata.get("keywords", [])
-        keywords_str = ", ".join(keywords) if isinstance(keywords, list) else str(keywords)
-        
-        injection_text = ""
-        if summary:
-            injection_text += f"[文档摘要: {summary}]\n"
-        if keywords_str:
-            injection_text += f"[文档关键词: {keywords_str}]\n"
-            
-        if injection_text and chunk.page_content.strip():
-            protected_content = f"{injection_text}{protected_content}"
+
 
         protected_chunk = Document(page_content=protected_content, metadata=chunk.metadata.copy())
         sub_chunks = text_splitter.split_documents([protected_chunk]) if ENABLE_SUB_CHUNKING else [protected_chunk]
