@@ -373,7 +373,9 @@ def retrieve_context(req: QueryRequest):
             domains=req.domains,
             source_files=req.source_files,
             query_type=req.query_type,
+            top_k=req.top_k,
             knowledge_base=req.knowledge_base,
+            debug=req.debug,
         )
     except (ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

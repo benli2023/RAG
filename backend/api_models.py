@@ -13,5 +13,7 @@ class QueryRequest(BaseModel):
     domains: list[str] = Field(default_factory=list)
     source_files: list[str] = Field(default_factory=list)
     query_type: str = "semantic"
+    top_k: int | None = None
     username: str = ANONYMOUS_USERNAME
     knowledge_base: str = DEFAULT_KNOWLEDGE_BASE
+    debug: bool = False

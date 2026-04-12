@@ -47,9 +47,9 @@ def build_retrieval_response(
     authorized_source_files: list[str],
     username: str,
     query_type: str,
-    diagnostics: dict[str, Any],
+    diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    response = {
         "context": context,
         "routed_domains": routed_domains,
         "expanded_routed_domains": expanded_routed_domains,
@@ -58,5 +58,9 @@ def build_retrieval_response(
         "authorized_source_files": authorized_source_files,
         "username": username,
         "query_type": query_type,
-        "diagnostics": diagnostics,
     }
+
+    if diagnostics is not None:
+        response["diagnostics"] = diagnostics
+
+    return response

@@ -18,6 +18,18 @@ from reranker_service import rerank_documents
 from retrieval_response_formatter import build_context_entry, build_retrieval_response
 
 
+def _normalize_top_k(top_k: int | None) -> int:
+    if top_k is None:
+        return FINAL_CONTEXT_K
+
+    try:
+        normalized = int(top_k)
+    except (TypeError, ValueError):
+        return FINAL_CONTEXT_K
+
+    return max(1, normalized)
+
+
 def _extract_denied_domains(source_files: list[str]) -> list[str]:
     return sorted({Path(source_file).parts[0] for source_file in source_files if Path(source_file).parts})
 
@@ -371,6 +383,7 @@ def _run_child_recall(
 def _build_observability_payload(
     query_type: str,
     retrieval_plan: dict[str, Any],
+    final_context_k: int,
     requested_domains: list[str],
     target_domains: list[str],
     routed_domains: list[str],
@@ -395,7 +408,7 @@ def _build_observability_payload(
             "vector_k": int(retrieval_plan.get("vector_k", VECTOR_RECALL_K)),
             "bm25_k": int(retrieval_plan.get("bm25_k", BM25_RECALL_K)),
             "fusion_top_k": int(retrieval_plan.get("fusion_top_k", FUSION_TOP_K)),
-            "final_context_k": FINAL_CONTEXT_K,
+            "final_context_k": final_context_k,
         },
         "requested_domains": requested_domains,
         "target_domains": target_domains,
@@ -413,7 +426,9 @@ def run_retrieval_pipeline(
     domains: list[str] | None = None,
     source_files: list[str] | None = None,
     query_type: str | None = None,
+    top_k: int | None = None,
     knowledge_base: str | None = None,
+    debug: bool = False,
 ) -> dict[str, Any]:
     normalized_query = query.strip()
     normalized_username = normalize_username(username)
@@ -421,16 +436,19 @@ def run_retrieval_pipeline(
     normalized_requested_source_files = dedupe_values(source_files or [])
     normalized_query_type = normalize_query_type(query_type)
     normalized_knowledge_base = normalize_knowledge_base_name(knowledge_base)
+    requested_top_k = _normalize_top_k(top_k)
     docs_dir = get_knowledge_base_dir(normalized_knowledge_base)
     vectorstore = get_vectorstore(normalized_knowledge_base)
     parent_vectorstore = get_parent_vectorstore(normalized_knowledge_base)
     es_index_name = get_child_es_index_name(normalized_knowledge_base)
     es_parent_index_name = get_parent_es_index_name(normalized_knowledge_base)
-    retrieval_plan = get_retrieval_strategy_plan(normalized_query_type)
+    retrieval_plan = dict(get_retrieval_strategy_plan(normalized_query_type))
+    retrieval_plan["fusion_top_k"] = max(int(retrieval_plan.get("fusion_top_k", FUSION_TOP_K)), requested_top_k)
     requested_strategy = str(retrieval_plan.get("strategy", "unknown"))
     requested_execution_mode = str(retrieval_plan.get("execution_mode", "hybrid")).strip() or "hybrid"
     supported_execution_modes = {"hybrid", "sql_query"}
     resolved_execution_mode = requested_execution_mode if requested_execution_mode in supported_execution_modes else "hybrid"
+    effective_final_context_k = requested_top_k
     
     if resolved_execution_mode == "hybrid" and _is_sql_query_candidate(normalized_query):
         resolved_execution_mode = "sql_query"
@@ -455,6 +473,8 @@ def run_retrieval_pipeline(
     trace["query_type"] = normalized_query_type
     trace["knowledge_base"] = normalized_knowledge_base
     trace["retrieval_plan"] = retrieval_plan
+    trace["requested_top_k"] = requested_top_k
+    trace["effective_final_context_k"] = effective_final_context_k
     trace["requested_execution_mode"] = requested_execution_mode
     trace["resolved_execution_mode"] = resolved_execution_mode
 
@@ -464,20 +484,23 @@ def run_retrieval_pipeline(
         print(f"🌐 接收到检索请求，但当前没有可检索文档，user={normalized_username}")
 
     if not has_candidate_documents:
-        diagnostics = _build_observability_payload(
-            query_type=normalized_query_type,
-            retrieval_plan=retrieval_plan,
-            requested_domains=normalized_requested_domains,
-            target_domains=normalized_requested_domains,
-            routed_domains=[],
-            expanded_routed_domains=[],
-            target_source_file_count=0,
-            two_stage_applied=False,
-            two_stage_fallback_reason="no-candidate-documents",
-            requested_execution_mode=requested_execution_mode,
-            resolved_execution_mode=resolved_execution_mode,
-        )
-        diagnostics["knowledge_base"] = normalized_knowledge_base
+        diagnostics = None
+        if debug:
+            diagnostics = _build_observability_payload(
+                query_type=normalized_query_type,
+                retrieval_plan=retrieval_plan,
+                final_context_k=effective_final_context_k,
+                requested_domains=normalized_requested_domains,
+                target_domains=normalized_requested_domains,
+                routed_domains=[],
+                expanded_routed_domains=[],
+                target_source_file_count=0,
+                two_stage_applied=False,
+                two_stage_fallback_reason="no-candidate-documents",
+                requested_execution_mode=requested_execution_mode,
+                resolved_execution_mode=resolved_execution_mode,
+            )
+            diagnostics["knowledge_base"] = normalized_knowledge_base
         response = build_retrieval_response(
             context=[],
             routed_domains=[],
@@ -661,7 +684,7 @@ def run_retrieval_pipeline(
             f"requested_execution_mode={requested_execution_mode}, execution_mode={resolved_execution_mode}, "
             f"vector_k={retrieval_plan['vector_k']}, bm25_k={retrieval_plan['bm25_k']}, "
             f"vector_weight={retrieval_plan['vector_weight']}, bm25_weight={retrieval_plan['bm25_weight']}, "
-            f"fusion_top_k={retrieval_plan['fusion_top_k']}, final_top_k={FINAL_CONTEXT_K}, "
+            f"fusion_top_k={retrieval_plan['fusion_top_k']}, final_top_k={effective_final_context_k}, "
             f"target_files={len(sql_target_source_files)}, target_domains={narrowed_domains}, filter={sql_filter_value}"
         )
 
@@ -684,7 +707,7 @@ def run_retrieval_pipeline(
             f"requested_execution_mode={requested_execution_mode}, execution_mode={resolved_execution_mode}, "
             f"vector_k={retrieval_plan['vector_k']}, bm25_k={retrieval_plan['bm25_k']}, "
             f"vector_weight={retrieval_plan['vector_weight']}, bm25_weight={retrieval_plan['bm25_weight']}, "
-            f"fusion_top_k={retrieval_plan['fusion_top_k']}, final_top_k={FINAL_CONTEXT_K}, "
+            f"fusion_top_k={retrieval_plan['fusion_top_k']}, final_top_k={effective_final_context_k}, "
             f"reranker_enabled={RERANKER_ENABLED}, target_files={len(narrowed_source_files)}, target_domains={narrowed_domains}, filter={child_filter_value}"
         )
 
@@ -702,7 +725,7 @@ def run_retrieval_pipeline(
         print(f"INFO: RRF 融合完成，fused_hits={len(fused_results)}")
 
     reranked_results = rank_results_for_generation(normalized_query, rerank_documents(normalized_query, fused_results))
-    selected_results = reranked_results[:FINAL_CONTEXT_K]
+    selected_results = reranked_results[:effective_final_context_k]
     final_results = selected_results
 
     if CONTEXT_COMPRESSION_ENABLED and selected_results:
@@ -755,6 +778,8 @@ def run_retrieval_pipeline(
         "execution_mode": resolved_execution_mode,
         "vector_weight": retrieval_plan["vector_weight"],
         "bm25_weight": retrieval_plan["bm25_weight"],
+        "requested_top_k": requested_top_k,
+        "final_context_k": effective_final_context_k,
         "two_stage_enabled": ENABLE_PARENT_CHILD_RETRIEVAL,
         "two_stage_applied": two_stage_applied,
         "two_stage_fallback_reason": two_stage_fallback_reason,
@@ -764,6 +789,7 @@ def run_retrieval_pipeline(
     diagnostics = _build_observability_payload(
         query_type=normalized_query_type,
         retrieval_plan=retrieval_plan,
+        final_context_k=effective_final_context_k,
         requested_domains=normalized_requested_domains,
         target_domains=narrowed_domains or effective_authorized_domains or normalized_requested_domains,
         routed_domains=routed_domains,
@@ -774,8 +800,11 @@ def run_retrieval_pipeline(
         requested_execution_mode=requested_execution_mode,
         resolved_execution_mode=resolved_execution_mode,
     )
-    diagnostics["requested_strategy"] = requested_strategy
-    diagnostics["knowledge_base"] = normalized_knowledge_base
+    if debug:
+        diagnostics["requested_strategy"] = requested_strategy
+        diagnostics["knowledge_base"] = normalized_knowledge_base
+    else:
+        diagnostics = None
 
     context = [
         build_context_entry(index, doc.metadata, doc.page_content)
