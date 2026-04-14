@@ -12,7 +12,7 @@ from api_models import QueryRequest, SourceFileRequest
 from documents_service import assert_document_access, build_index_documents, list_docs_markdown_files, normalize_docs_relative_path
 from es_service import clear_es_index, delete_by_source_file_in_es, get_es_runtime_config, upsert_chunks_to_es
 from knowledge_base_service import get_child_es_index_name, get_knowledge_base_dir, get_module_directory_file, get_parent_es_index_name, list_knowledge_bases, normalize_knowledge_base_name
-from rag_config import DASHBOARD_DIR, DASHBOARD_INDEX, DEFAULT_KNOWLEDGE_BASE, ENABLE_ACL, ENABLE_PARENT_CHILD_RETRIEVAL, ENABLE_SUB_CHUNKING, get_runtime_config
+from rag_config import DASHBOARD_DIR, DASHBOARD_INDEX, DEFAULT_KNOWLEDGE_BASE, ENABLE_ACL, ENABLE_HTTPS, ENABLE_PARENT_CHILD_RETRIEVAL, ENABLE_SUB_CHUNKING, get_runtime_config
 from rag_store import embedding_function, get_parent_vectorstore, get_vectorstore
 from retrieval_pipeline_service import run_retrieval_pipeline
 from retrieval_strategy_config import get_routing_runtime_config, normalize_query_type
@@ -384,4 +384,19 @@ def retrieve_context(req: QueryRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    
+    server_kwargs = {
+        "app": app,
+        "host": "0.0.0.0",
+        "port": 8000,
+    }
+
+    if ENABLE_HTTPS:
+        cert_dir = Path(__file__).resolve().parent / "certs"
+        server_kwargs["ssl_certfile"] = str(cert_dir / "server.crt")
+        server_kwargs["ssl_keyfile"] = str(cert_dir / "server.key")
+        print("Starting server with HTTPS enabled.")
+    else:
+        print("Starting server with HTTPS disabled (HTTP).")
+
+    uvicorn.run(**server_kwargs)

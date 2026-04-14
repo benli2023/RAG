@@ -182,6 +182,11 @@ DASHBOARD_DIR = PROJECT_ROOT / "static"
 # 前端首页文件
 DASHBOARD_INDEX = DASHBOARD_DIR / "index.html"
 
+# ==================== 服务端配置 ====================
+
+# 是否启用 HTTPS
+ENABLE_HTTPS = _get_bool_config("ENABLE_HTTPS", False)
+
 
 def get_runtime_config() -> dict[str, object]:
 	health = _build_runtime_health()
@@ -194,6 +199,9 @@ def get_runtime_config() -> dict[str, object]:
 			"username_group_mapping_file": str(USERNAME_GROUP_MAPPING_FILE),
 			"dashboard_dir": str(DASHBOARD_DIR),
 			"dashboard_index": str(DASHBOARD_INDEX),
+		},
+		"server": {
+			"enable_https": ENABLE_HTTPS,
 		},
 		"indexing": {
 			"db_dir": DB_DIR,
@@ -260,6 +268,7 @@ def get_runtime_config() -> dict[str, object]:
 			"rerank_candidate_k": _get_config_source("RERANK_CANDIDATE_K"),
 			"reranker_model_name": _get_config_source("RERANKER_MODEL_NAME"),
 			"reranker_device": _get_config_source("RERANKER_DEVICE"),
+			"enable_https": _get_config_source("ENABLE_HTTPS"),
 		},
 		"health": health,
 	}
