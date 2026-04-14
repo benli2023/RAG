@@ -212,7 +212,12 @@ def get_es_client():
         _raise_unavailable()
 
     try:
-        client = Elasticsearch(ES_URL, request_timeout=5)
+        client = Elasticsearch(
+            ES_URL,
+            request_timeout=5,
+            verify_certs=False,
+            ssl_show_warn=False,
+        )
         if not client.ping():
             raise RuntimeError(f"cannot connect to {ES_URL}")
         ensure_index(client)

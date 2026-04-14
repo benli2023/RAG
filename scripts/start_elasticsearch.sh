@@ -8,14 +8,20 @@ PID_DIR="$PROJECT_ROOT/.tmp"
 PID_FILE="$PID_DIR/elasticsearch.pid"
 LOG_FILE="$LOG_DIR/elasticsearch.log"
 LOCAL_CONF_DIR="$PID_DIR/elasticsearch-config"
-ES_URL="${ES_URL:-http://localhost:9200}"
+ES_URL="${ES_URL:-https://localhost:9200}"
 ES_STARTUP_TIMEOUT="${ES_STARTUP_TIMEOUT:-180}"
 ES_STARTUP_ARGS=(
   -E discovery.type=single-node
-  -E xpack.security.enabled=false
+  -E xpack.security.enabled=true
   -E xpack.security.enrollment.enabled=false
-  -E xpack.security.http.ssl.enabled=false
-  -E xpack.security.transport.ssl.enabled=false
+  -E xpack.security.http.ssl.enabled=true
+  -E xpack.security.http.ssl.key=certs/server.key
+  -E xpack.security.http.ssl.certificate=certs/server.crt
+  -E xpack.security.transport.ssl.enabled=true
+  -E xpack.security.transport.ssl.key=certs/server.key
+  -E xpack.security.transport.ssl.certificate=certs/server.crt
+  -E xpack.security.transport.ssl.verification_mode=none
+  -E logger.org.elasticsearch.http.HttpTracer=TRACE
 )
 
 mkdir -p "$LOG_DIR" "$PID_DIR"
@@ -23,19 +29,37 @@ mkdir -p "$LOG_DIR" "$PID_DIR"
 prepare_local_config() {
   local source_conf_dir="$ES_HOME/config"
   rm -rf "$LOCAL_CONF_DIR"
-  mkdir -p "$LOCAL_CONF_DIR"
+  mkdir -p "$LOCAL_CONF_DIR/certs"
   cp -R "$source_conf_dir/." "$LOCAL_CONF_DIR/"
 
-  cat >"$LOCAL_CONF_DIR/elasticsearch.yml" <<'EOF'
+  # 复制证书到配置目录
+  cp "$PROJECT_ROOT/backend/certs/server.crt" "$LOCAL_CONF_DIR/certs/"
+  cp "$PROJECT_ROOT/backend/certs/server.key" "$LOCAL_CONF_DIR/certs/"
+
+  cat >"$LOCAL_CONF_DIR/elasticsearch.yml" <<EOF
 discovery.type: single-node
-xpack.security.enabled: false
+xpack.security.enabled: true
 xpack.security.enrollment.enabled: false
-xpack.security.http.ssl.enabled: false
-xpack.security.transport.ssl.enabled: false
+xpack.security.http.ssl.enabled: true
+xpack.security.http.ssl.key: certs/server.key
+xpack.security.http.ssl.certificate: certs/server.crt
+xpack.security.transport.ssl.enabled: true
+xpack.security.transport.ssl.key: certs/server.key
+xpack.security.transport.ssl.certificate: certs/server.crt
+xpack.security.transport.ssl.verification_mode: none
+
+# Enable request URI logging to show index names and HTTP details
+logger.org.elasticsearch.http.HttpTracer: TRACE
+
+# 启用匿名访问以维持免密连接的后向兼容性
+xpack.security.authc.anonymous:
+  username: anonymous_user
+  roles: [superuser]
+  authz_exception: true
 EOF
 }
 
-if curl -fsS "$ES_URL" >/dev/null 2>&1; then
+if curl -kfsS "$ES_URL" >/dev/null 2>&1; then
   echo "Elasticsearch is already running at $ES_URL"
   exit 0
 fi
@@ -99,7 +123,7 @@ es_pid=$!
 echo "$es_pid" > "$PID_FILE"
 
 for _ in $(seq 1 "$ES_STARTUP_TIMEOUT"); do
-  if curl -fsS "$ES_URL" >/dev/null 2>&1; then
+  if curl -kfsS "$ES_URL" >/dev/null 2>&1; then
     echo "Elasticsearch is up at $ES_URL"
     exit 0
   fi

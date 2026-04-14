@@ -115,7 +115,7 @@ REMOTE_DB_CERT = os.getenv("REMOTE_DB_CERT", str(PROJECT_ROOT / "RAG-RPC" / "cer
 # 本地 Reranker 模型目录
 LOCAL_RERANKER_PATH = PROJECT_ROOT / "my_local_bge_reranker"
 # Elasticsearch 连接地址
-ES_URL = os.getenv("ES_URL", "http://localhost:9200")
+ES_URL = os.getenv("ES_URL", "https://localhost:9200")
 # Elasticsearch 子切片倒排索引名称
 ES_INDEX_NAME = os.getenv("ES_INDEX_NAME", "rag_docs_bm25")
 # Elasticsearch 父文档倒排索引名称
