@@ -308,8 +308,7 @@ def _resolve_sql_source_files(source_files: list[str], domains: list[str], query
     domain_set = set(dedupe_values(domains)) if domains else None
 
     try:
-        collection = vectorstore._collection
-        records = collection.get(include=["metadatas"])
+        records = vectorstore.get_records(include=["metadatas"])
         metadatas = records.get("metadatas", [])
     except Exception:
         return dedupe_values(source_files)
@@ -342,7 +341,7 @@ def _resolve_sql_source_files(source_files: list[str], domains: list[str], query
 
 def _collection_count(resolved_vectorstore) -> int:
     try:
-        return int(resolved_vectorstore._collection.count())
+        return int(resolved_vectorstore.count())
     except Exception:
         return 0
 

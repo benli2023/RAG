@@ -1,0 +1,6 @@
+grpcio
+grpcio-tools
+langchain-chroma
+langchain-huggingface
+sentence-transformers
+pydantic

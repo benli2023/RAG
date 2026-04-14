@@ -151,7 +151,7 @@ def _load_cases(case_file: str | None, query: str | None, username: str) -> list
 
 
 def _collect_index_health() -> dict[str, Any]:
-    vector_count = int(vectorstore._collection.count())
+    vector_count = int(vectorstore.count())
     client = get_es_client()
     es_count = None
     es_available = client is not None

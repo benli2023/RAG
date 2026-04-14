@@ -8,3 +8,5 @@ langchain-community
 langchain-huggingface
 sentence-transformers
 elasticsearch
+grpcio
+grpcio-tools

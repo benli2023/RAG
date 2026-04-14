@@ -508,7 +508,7 @@ def _maybe_augment_corpus(enable: bool) -> dict[str, Any]:
 
 
 def _collect_index_health() -> dict[str, Any]:
-	vector_count = int(vectorstore._collection.count())
+	vector_count = int(vectorstore.count())
 	chunk_stats = get_chunk_statistics(vectorstore)
 
 	es_available = False

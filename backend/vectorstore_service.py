@@ -87,7 +87,7 @@ def upsert_chunks(chunks: List[Document], embedding_function, vectorstore) -> di
     print(f"[embed_documents] embedded {len(unique_documents)} chunks in {embed_elapsed:.2f}s")
     _write_progress_line(f"[add_documents] upserting {len(unique_documents)} chunks")
     upsert_start = time.perf_counter()
-    vectorstore._collection.upsert(
+    vectorstore.upsert(
         ids=unique_ids,
         documents=unique_documents,
         metadatas=unique_metadatas,
@@ -114,27 +114,15 @@ def delete_by_source_file(source_file: str, vectorstore) -> int:
     if not cleaned:
         raise ValueError("source_file is empty")
 
-    records = vectorstore._collection.get(where={"source_file": cleaned}, include=[])
-    ids = records.get("ids", [])
-    if not ids:
-        return 0
-
-    vectorstore._collection.delete(ids=ids)
-    return len(ids)
+    return vectorstore.delete_by_source_file(cleaned)
 
 
 def clear_vectorstore(vectorstore) -> int:
-    existing = vectorstore._collection.get(include=[])
-    ids = existing.get("ids", [])
-    if not ids:
-        return 0
-
-    vectorstore._collection.delete(ids=ids)
-    return len(ids)
+    return vectorstore.clear()
 
 
 def get_chunk_statistics(vectorstore) -> dict:
-    records = vectorstore._collection.get(include=["metadatas", "documents"])
+    records = vectorstore.get_records(include=["metadatas", "documents"])
     metadatas = records.get("metadatas", [])
     documents = records.get("documents", [])
 
@@ -170,7 +158,7 @@ def get_chunk_statistics(vectorstore) -> dict:
 
 
 def get_grouped_source_files_from_vectorstore(vectorstore) -> List[dict]:
-    records = vectorstore._collection.get(include=["metadatas"])
+    records = vectorstore.get_records(include=["metadatas"])
     metadatas = records.get("metadatas", [])
 
     grouped: dict[str, set[str]] = {}

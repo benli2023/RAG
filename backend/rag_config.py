@@ -106,6 +106,12 @@ USERNAME_GROUP_MAPPING_FILE = Path(__file__).resolve().parent / "username_group_
 LOCAL_MODEL_PATH = PROJECT_ROOT / "my_local_bge_m3"
 # 向量数据库存储目录
 DB_DIR = "./chroma_multimodule_db"
+# 是否使用远程向量数据库
+USE_REMOTE_DB = _get_bool_config("USE_REMOTE_DB", True)
+# 远程向量数据库连接地址
+REMOTE_DB_TARGET = os.getenv("REMOTE_DB_TARGET", "localhost:50051")
+# 远程向量数据库证书路径
+REMOTE_DB_CERT = os.getenv("REMOTE_DB_CERT", str(PROJECT_ROOT / "RAG-RPC" / "certs" / "server.crt"))
 # 本地 Reranker 模型目录
 LOCAL_RERANKER_PATH = PROJECT_ROOT / "my_local_bge_reranker"
 # Elasticsearch 连接地址
@@ -198,6 +204,9 @@ def get_runtime_config() -> dict[str, object]:
 			"es_url": ES_URL,
 			"es_index_name": ES_INDEX_NAME,
 			"es_parent_index_name": ES_PARENT_INDEX_NAME,
+			"use_remote_db": USE_REMOTE_DB,
+			"remote_db_target": REMOTE_DB_TARGET,
+			"remote_db_cert": str(REMOTE_DB_CERT),
 		},
 		"retrieval": {
 			"retrieval_k": RETRIEVAL_K,
@@ -232,6 +241,9 @@ def get_runtime_config() -> dict[str, object]:
 			"es_url": _get_config_source("ES_URL"),
 			"es_index_name": _get_config_source("ES_INDEX_NAME"),
 			"es_parent_index_name": _get_config_source("ES_PARENT_INDEX_NAME"),
+			"use_remote_db": _get_config_source("USE_REMOTE_DB"),
+			"remote_db_target": _get_config_source("REMOTE_DB_TARGET"),
+			"remote_db_cert": _get_config_source("REMOTE_DB_CERT"),
 			"enable_acl": _get_config_source("ENABLE_ACL"),
 			"enable_sub_chunking": _get_config_source("ENABLE_SUB_CHUNKING"),
 			"final_context_k": _get_config_source("FINAL_CONTEXT_K"),

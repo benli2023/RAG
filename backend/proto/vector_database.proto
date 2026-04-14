@@ -1,0 +1,81 @@
+syntax = "proto3";
+
+package vectordb;
+
+message Document {
+    string page_content = 1;
+    string metadata_json = 2; 
+}
+
+message SimilaritySearchRequest {
+    string collection_name = 1;
+    string query = 2;
+    int32 k = 3;
+    string filter_json = 4;
+}
+
+message SimilaritySearchResponse {
+    repeated Document documents = 1;
+}
+
+message FloatArray {
+    repeated float values = 1;
+}
+
+message UpsertRequest {
+    string collection_name = 1;
+    repeated string ids = 2;
+    repeated string documents = 3;
+    repeated string metadatas_json = 4;
+    repeated FloatArray embeddings = 5;
+}
+
+message UpsertResponse {
+    bool success = 1;
+}
+
+message DeleteBySourceFileRequest {
+    string collection_name = 1;
+    string source_file = 2;
+}
+
+message DeleteResponse {
+    int32 deleted_count = 1;
+}
+
+message ClearRequest {
+    string collection_name = 1;
+}
+
+message ClearResponse {
+    int32 deleted_count = 1;
+}
+
+message CountRequest {
+    string collection_name = 1;
+}
+
+message CountResponse {
+    int32 count = 1;
+}
+
+message GetRecordsRequest {
+    string collection_name = 1;
+    repeated string include = 2;
+    string where_json = 3;
+}
+
+message GetRecordsResponse {
+    repeated string ids = 1;
+    repeated string documents = 2;
+    repeated string metadatas_json = 3;
+}
+
+service VectorDatabaseService {
+    rpc SimilaritySearch(SimilaritySearchRequest) returns (SimilaritySearchResponse);
+    rpc Upsert(UpsertRequest) returns (UpsertResponse);
+    rpc DeleteBySourceFile(DeleteBySourceFileRequest) returns (DeleteResponse);
+    rpc Clear(ClearRequest) returns (ClearResponse);
+    rpc Count(CountRequest) returns (CountResponse);
+    rpc GetRecords(GetRecordsRequest) returns (GetRecordsResponse);
+}
