@@ -1,8 +1,17 @@
 import sys
 import os
+import platform
+if platform.system() == "Linux":
+    try:
+        __import__('pysqlite3')
+        sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+    except ImportError:
+        pass
+
 from pathlib import Path
 import json
 from concurrent import futures
+import time
 
 import grpc
 from langchain_chroma import Chroma
@@ -68,6 +77,27 @@ class VectorDatabaseServicer(pb2_grpc.VectorDatabaseServiceServicer):
         db = self.multi_db.get_db(request.collection_name)
         metadatas = [json.loads(mj) for mj in request.metadatas_json]
         embeddings = [list(e.values) for e in request.embeddings]
+        
+        # 委托服务器进行模型推理 (若客户端传空)
+        if not embeddings and getattr(self.multi_db, 'embedding_function', None) and request.documents:
+            print(f"[gRPC] Calculating embeddings for {len(request.documents)} documents...")
+            docs = list(request.documents)
+            batch_size = 32
+            start_time = time.perf_counter()
+            embedded_count = 0
+            total_documents = len(docs)
+            for i in range(0, total_documents, batch_size):
+                batch_docs = docs[i : i + batch_size]
+                batch_start = time.perf_counter()
+                batch_embeddings = self.multi_db.embedding_function.embed_documents(batch_docs)
+                embeddings.extend(batch_embeddings)
+                embedded_count += len(batch_docs)
+                batch_elapsed = time.perf_counter() - batch_start
+                print(f"[gRPC] Embedded {embedded_count}/{total_documents} "
+                      f"batch={i//batch_size + 1} size={len(batch_docs)} "
+                      f"time={batch_elapsed:.2f}s")
+            total_elapsed = time.perf_counter() - start_time
+            print(f"[gRPC] Finished embedding {total_documents} chunks in {total_elapsed:.2f}s")
         
         db.upsert(
             ids=list(request.ids),

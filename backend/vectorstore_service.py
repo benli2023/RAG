@@ -1,6 +1,6 @@
 import time
 import sys
-from typing import Iterable, List
+from typing import List
 
 from langchain_core.documents import Document
 
@@ -8,7 +8,6 @@ from documents_service import build_chunk_id, sanitize_metadata
 from retrieval_response_formatter import extract_context_labels
 
 
-DEFAULT_EMBEDDING_BATCH_SIZE = 32
 _progress_line_length = 0
 
 
@@ -21,12 +20,7 @@ def _write_progress_line(message: str) -> None:
     sys.stdout.flush()
 
 
-def _batch_iter(items: list[str], batch_size: int) -> Iterable[tuple[int, list[str]]]:
-    for start_index in range(0, len(items), batch_size):
-        yield start_index, items[start_index : start_index + batch_size]
-
-
-def upsert_chunks(chunks: List[Document], embedding_function, vectorstore) -> dict:
+def upsert_chunks(chunks: List[Document], vectorstore) -> dict:
     if not chunks:
         return {
             "chunk_count": 0,
@@ -54,57 +48,38 @@ def upsert_chunks(chunks: List[Document], embedding_function, vectorstore) -> di
     if duplicate_count:
         print(f"[upsert_chunks] skipped {duplicate_count} duplicate chunks by chunk_id")
 
-    total_documents = len(unique_documents)
-    batch_size = min(DEFAULT_EMBEDDING_BATCH_SIZE, total_documents)
-    _write_progress_line(f"[embed_documents] 0/{total_documents} (0%) start embedding chunks")
-    add_start = time.perf_counter()
-    embeddings = []
-    embedded_count = 0
-
-    for batch_start, document_batch in _batch_iter(unique_documents, batch_size):
-        batch_start_time = time.perf_counter()
-        batch_embeddings = embedding_function.embed_documents(document_batch)
-        embeddings.extend(batch_embeddings)
-        embedded_count += len(document_batch)
-        batch_elapsed = time.perf_counter() - batch_start_time
-        progress_ratio = embedded_count / total_documents if total_documents else 1.0
-        _write_progress_line(
-            f"[embed_documents] {embedded_count}/{total_documents} ({progress_ratio:.0%}) "
-            f"batch={batch_start // batch_size + 1} size={len(document_batch)} "
-            f"batch_seconds={batch_elapsed:.2f}s"
-        )
-
-    embed_elapsed = time.perf_counter() - add_start
-
     global _progress_line_length
 
-    sys.stdout.write("\r")
-    if _progress_line_length:
-        sys.stdout.write(" " * _progress_line_length)
-        sys.stdout.write("\r")
-    _progress_line_length = 0
-    sys.stdout.flush()
-    print(f"[embed_documents] embedded {len(unique_documents)} chunks in {embed_elapsed:.2f}s")
-    _write_progress_line(f"[add_documents] upserting {len(unique_documents)} chunks")
     upsert_start = time.perf_counter()
-    vectorstore.upsert(
-        ids=unique_ids,
-        documents=unique_documents,
-        metadatas=unique_metadatas,
-        embeddings=embeddings,
-    )
+    total_documents = len(unique_documents)
+    batch_size = 500  # 避免单次 gRPC 请求超过 4MB 等限制
+
+    for i in range(0, total_documents, batch_size):
+        batch_ids = unique_ids[i : i + batch_size]
+        batch_docs = unique_documents[i : i + batch_size]
+        batch_metas = unique_metadatas[i : i + batch_size]
+
+        _write_progress_line(f"[add_documents] submitting batch {i // batch_size + 1}/{(total_documents - 1) // batch_size + 1} ({len(batch_docs)} chunks) to RPC")
+        vectorstore.upsert(
+            ids=batch_ids,
+            documents=batch_docs,
+            metadatas=batch_metas,
+            embeddings=[],  # 传空向量从而触发 RAG-RPC 进行向量计算
+        )
+
     add_elapsed = time.perf_counter() - upsert_start
+    
     sys.stdout.write("\r")
     if _progress_line_length:
         sys.stdout.write(" " * _progress_line_length)
         sys.stdout.write("\r")
     _progress_line_length = 0
     sys.stdout.flush()
-    print(f"[add_documents] upserted {len(unique_documents)} chunks in {add_elapsed:.2f}s")
+    print(f"[add_documents] RPC completely processed {total_documents} chunks in {add_elapsed:.2f}s")
 
     return {
         "chunk_count": len(unique_documents),
-        "embed_seconds": round(embed_elapsed, 2),
+        "embed_seconds": 0.0,
         "add_documents_seconds": round(add_elapsed, 2),
     }
 

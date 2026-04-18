@@ -15,7 +15,7 @@ from rag_config import BM25_RECALL_K, CONTEXT_COMPRESSION_ENABLED, CONTEXT_COMPR
 from rag_store import get_parent_vectorstore, get_vectorstore
 from retrieval_strategy_config import get_retrieval_strategy_plan, normalize_query_type
 from reranker_service import rerank_documents
-from retrieval_response_formatter import build_context_entry, build_retrieval_response
+from retrieval_response_formatter import build_retrieval_response
 
 
 def _normalize_top_k(top_k: int | None) -> int:
@@ -806,8 +806,12 @@ def run_retrieval_pipeline(
         diagnostics = None
 
     context = [
-        build_context_entry(index, doc.metadata, doc.page_content)
-        for index, doc in enumerate(final_results)
+        {
+            "metadata": doc.metadata,
+            "reranker_score": doc.metadata.get("reranker_score"),
+            "page_content": doc.page_content,
+        }
+        for doc in final_results
     ]
 
     response = build_retrieval_response(

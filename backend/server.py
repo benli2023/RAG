@@ -1,5 +1,14 @@
 import os
 import sys
+import platform
+
+if platform.system() == "Linux":
+    try:
+        __import__("pysqlite3")
+        sys.modules["sqlite3"] = sys.modules.pop("pysqlite3")
+    except ImportError:
+        pass
+
 from pathlib import Path
 
 import frontmatter
@@ -13,7 +22,7 @@ from documents_service import assert_document_access, build_index_documents, lis
 from es_service import clear_es_index, delete_by_source_file_in_es, get_es_runtime_config, upsert_chunks_to_es
 from knowledge_base_service import get_child_es_index_name, get_knowledge_base_dir, get_module_directory_file, get_parent_es_index_name, list_knowledge_bases, normalize_knowledge_base_name
 from rag_config import DASHBOARD_DIR, DASHBOARD_INDEX, DEFAULT_KNOWLEDGE_BASE, ENABLE_ACL, ENABLE_HTTPS, ENABLE_PARENT_CHILD_RETRIEVAL, ENABLE_SUB_CHUNKING, get_runtime_config
-from rag_store import embedding_function, get_parent_vectorstore, get_vectorstore
+from rag_store import get_parent_vectorstore, get_vectorstore
 from retrieval_pipeline_service import run_retrieval_pipeline
 from retrieval_strategy_config import get_routing_runtime_config, normalize_query_type
 from vectorstore_service import clear_vectorstore, delete_by_source_file, get_chunk_statistics, get_grouped_source_files_from_vectorstore, upsert_chunks
@@ -126,8 +135,8 @@ def ingest_docs(knowledge_base: str = DEFAULT_KNOWLEDGE_BASE):
             "knowledge_base": normalized_name,
             "message": f"未找到可入库的 Markdown 内容，共扫描 {len(md_files)} 个文件。",
         }
-    parent_upsert_result = upsert_chunks(parent_docs, embedding_function, parent_vectorstore)
-    upsert_result = upsert_chunks(final_chunks, embedding_function, vectorstore)
+    parent_upsert_result = upsert_chunks(parent_docs, parent_vectorstore)
+    upsert_result = upsert_chunks(final_chunks, vectorstore)
     parent_es_upsert_result = upsert_chunks_to_es(parent_docs, index_name=es_parent_index_name)
     child_es_upsert_result = upsert_chunks_to_es(final_chunks, index_name=es_index_name)
     es_sync_message = "并已同步检索索引。" if parent_es_upsert_result["enabled"] and child_es_upsert_result["enabled"] else "，但未启用 ES BM25，同步已跳过。"
@@ -333,8 +342,8 @@ def update_document_chunks(req: SourceFileRequest):
     deleted_es_count = delete_by_source_file_in_es(req.source_file, index_name=es_index_name)
     parent_doc, chunks = build_index_documents(file_path, docs_dir)
     parent_docs = [parent_doc] if parent_doc is not None else []
-    parent_upsert_result = upsert_chunks(parent_docs, embedding_function, parent_vectorstore)
-    upsert_result = upsert_chunks(chunks, embedding_function, vectorstore)
+    parent_upsert_result = upsert_chunks(parent_docs, parent_vectorstore)
+    upsert_result = upsert_chunks(chunks, vectorstore)
     parent_es_upsert_result = upsert_chunks_to_es(parent_docs, index_name=es_parent_index_name)
     child_es_upsert_result = upsert_chunks_to_es(chunks, index_name=es_index_name)
     es_sync_message = "" if parent_es_upsert_result["enabled"] and child_es_upsert_result["enabled"] else "，但未启用 ES BM25，同步已跳过"
