@@ -401,9 +401,9 @@ if __name__ == "__main__":
     }
 
     if ENABLE_HTTPS:
-        cert_dir = Path(__file__).resolve().parent / "certs"
-        server_kwargs["ssl_certfile"] = str(cert_dir / "server.crt")
-        server_kwargs["ssl_keyfile"] = str(cert_dir / "server.key")
+        from rag_config import SERVER_CRT, SERVER_KEY
+        server_kwargs["ssl_certfile"] = str(SERVER_CRT)
+        server_kwargs["ssl_keyfile"] = str(SERVER_KEY)
         print("Starting server with HTTPS enabled.")
     else:
         print("Starting server with HTTPS disabled (HTTP).")

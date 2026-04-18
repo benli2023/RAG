@@ -1,5 +1,28 @@
+import json
 import os
 from pathlib import Path
+
+RAG_CONFIG_PATH = os.getenv("RAG_CONFIG_PATH", str(Path(__file__).resolve().parent / "config.json"))
+try:
+	with open(RAG_CONFIG_PATH, "r", encoding="utf-8") as _f:
+		_rag_config_json = json.load(_f)
+except Exception:
+	_rag_config_json = {}
+
+_certs_dir = _rag_config_json.get("certs_dir", "certs")
+if os.path.isabs(_certs_dir):
+	CERTS_DIR = Path(_certs_dir)
+else:
+	CERTS_DIR = Path(__file__).resolve().parent / _certs_dir
+
+SERVER_CRT = CERTS_DIR / _rag_config_json.get("server", {}).get("crt", "server.crt")
+SERVER_KEY = CERTS_DIR / _rag_config_json.get("server", {}).get("key", "server.key")
+
+RPC_CRT = CERTS_DIR / _rag_config_json.get("rpc", {}).get("crt", "server.crt")
+RPC_KEY = CERTS_DIR / _rag_config_json.get("rpc", {}).get("key", "server.key")
+
+ES_CRT = CERTS_DIR / _rag_config_json.get("elasticsearch", {}).get("crt", "server.crt")
+ES_KEY = CERTS_DIR / _rag_config_json.get("elasticsearch", {}).get("key", "server.key")
 
 
 def _parse_bool(value: object, default: bool) -> bool:
@@ -111,7 +134,7 @@ USE_REMOTE_DB = _get_bool_config("USE_REMOTE_DB", True)
 # 远程向量数据库连接地址
 REMOTE_DB_TARGET = os.getenv("REMOTE_DB_TARGET", "localhost:50051")
 # 远程向量数据库证书路径
-REMOTE_DB_CERT = os.getenv("REMOTE_DB_CERT", str(PROJECT_ROOT / "RAG-RPC" / "certs" / "server.crt"))
+REMOTE_DB_CERT = os.getenv("REMOTE_DB_CERT", str(RPC_CRT))
 # 本地 Reranker 模型目录
 LOCAL_RERANKER_PATH = PROJECT_ROOT / "my_local_bge_reranker"
 # Elasticsearch 连接地址
