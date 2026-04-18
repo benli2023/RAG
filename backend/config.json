@@ -1,0 +1,15 @@
+{
+  "certs_dir": "certs",
+  "server": {
+    "crt": "server.crt",
+    "key": "server.key"
+  },
+  "rpc": {
+    "crt": "server.crt",
+    "key": "server.key"
+  },
+  "elasticsearch": {
+    "crt": "server.crt",
+    "key": "server.key"
+  }
+}
