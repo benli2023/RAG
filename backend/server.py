@@ -19,7 +19,6 @@ from fastapi.staticfiles import StaticFiles
 from access_control import ANONYMOUS_USERNAME
 from api_models import QueryRequest, SourceFileRequest
 from documents_service import assert_document_access, build_index_documents, list_docs_markdown_files, normalize_docs_relative_path
-from es_service import clear_es_index, delete_by_source_file_in_es, get_es_runtime_config, upsert_chunks_to_es
 from knowledge_base_service import get_child_es_index_name, get_knowledge_base_dir, get_module_directory_file, get_parent_es_index_name, list_knowledge_bases, normalize_knowledge_base_name
 from rag_config import DASHBOARD_DIR, DASHBOARD_INDEX, DEFAULT_KNOWLEDGE_BASE, ENABLE_ACL, ENABLE_HTTPS, ENABLE_PARENT_CHILD_RETRIEVAL, ENABLE_SUB_CHUNKING, get_runtime_config
 from rag_store import get_parent_vectorstore, get_vectorstore
@@ -115,6 +114,7 @@ def ingest_docs(knowledge_base: str = DEFAULT_KNOWLEDGE_BASE):
     parent_docs = []
     final_chunks = []
     total_files = len(md_files)
+    remote_service = get_remote_retrieval_service()
     
     for file_index, file_path in enumerate(md_files, start=1):
         parent_doc, file_chunks = build_index_documents(file_path, docs_dir)
@@ -137,8 +137,8 @@ def ingest_docs(knowledge_base: str = DEFAULT_KNOWLEDGE_BASE):
         }
     parent_upsert_result = upsert_chunks(parent_docs, parent_vectorstore)
     upsert_result = upsert_chunks(final_chunks, vectorstore)
-    parent_es_upsert_result = upsert_chunks_to_es(parent_docs, index_name=es_parent_index_name)
-    child_es_upsert_result = upsert_chunks_to_es(final_chunks, index_name=es_index_name)
+    parent_es_upsert_result = remote_service.upsert_chunks_to_es(parent_docs, index_name=es_parent_index_name)
+    child_es_upsert_result = remote_service.upsert_chunks_to_es(final_chunks, index_name=es_index_name)
     es_sync_message = "并已同步检索索引。" if parent_es_upsert_result["enabled"] and child_es_upsert_result["enabled"] else "，但未启用 ES BM25，同步已跳过。"
     return {
         "knowledge_base": normalized_name,
@@ -171,8 +171,9 @@ def clear_index(knowledge_base: str = DEFAULT_KNOWLEDGE_BASE):
     es_index_name = str(runtime["es_index_name"])
     deleted_parent_count = clear_vectorstore(parent_vectorstore)
     deleted_vector_count = clear_vectorstore(vectorstore)
-    deleted_parent_es_count = clear_es_index(index_name=es_parent_index_name, recreate=True)
-    deleted_es_count = clear_es_index(index_name=es_index_name, recreate=True)
+    remote_service = get_remote_retrieval_service()
+    deleted_parent_es_count = remote_service.clear_es_index(index_name=es_parent_index_name, recreate=True)
+    deleted_es_count = remote_service.clear_es_index(index_name=es_index_name, recreate=True)
     return {
         "knowledge_base": normalized_name,
         "message": f"已清空检索索引，父文档索引删除 {deleted_parent_count} 条，子切片向量库删除 {deleted_vector_count} 条，父 BM25 索引删除 {deleted_parent_es_count} 条，子 BM25 索引删除 {deleted_es_count} 条。",
@@ -194,8 +195,9 @@ def rebuild_index(knowledge_base: str = DEFAULT_KNOWLEDGE_BASE):
     es_index_name = str(runtime["es_index_name"])
     deleted_parent_count = clear_vectorstore(parent_vectorstore)
     deleted_vector_count = clear_vectorstore(vectorstore)
-    deleted_parent_es_count = clear_es_index(index_name=es_parent_index_name, recreate=True)
-    deleted_es_count = clear_es_index(index_name=es_index_name, recreate=True)
+    remote_service = get_remote_retrieval_service()
+    deleted_parent_es_count = remote_service.clear_es_index(index_name=es_parent_index_name, recreate=True)
+    deleted_es_count = remote_service.clear_es_index(index_name=es_index_name, recreate=True)
     ingest_result = ingest_docs(knowledge_base=normalized_name)
     return {
         "knowledge_base": normalized_name,
@@ -231,7 +233,7 @@ def get_config(knowledge_base: str = DEFAULT_KNOWLEDGE_BASE):
     }
     runtime_config["indexing"]["child_es_index_name"] = runtime["es_index_name"]
     runtime_config["indexing"]["parent_es_index_name"] = runtime["es_parent_index_name"]
-    runtime_config["indexing"]["es_runtime"] = get_es_runtime_config([
+    runtime_config["indexing"]["es_runtime"] = get_remote_retrieval_service().get_es_runtime_config([
         str(runtime["es_index_name"]),
         str(runtime["es_parent_index_name"]),
     ])
@@ -310,10 +312,11 @@ def list_grouped_documents_from_vectorstore(knowledge_base: str = DEFAULT_KNOWLE
 @app.post("/docs/delete")
 def delete_document_chunks(req: SourceFileRequest):
     runtime = _resolve_knowledge_base_runtime(req.knowledge_base)
+    remote_service = get_remote_retrieval_service()
     deleted_parent_count = delete_by_source_file(req.source_file, runtime["parent_vectorstore"])
     deleted_vector_count = delete_by_source_file(req.source_file, runtime["vectorstore"])
-    deleted_parent_es_count = delete_by_source_file_in_es(req.source_file, index_name=str(runtime["es_parent_index_name"]))
-    deleted_es_count = delete_by_source_file_in_es(req.source_file, index_name=str(runtime["es_index_name"]))
+    deleted_parent_es_count = remote_service.delete_by_source_file_in_es(req.source_file, index_name=str(runtime["es_parent_index_name"]))
+    deleted_es_count = remote_service.delete_by_source_file_in_es(req.source_file, index_name=str(runtime["es_index_name"]))
     return {
         "knowledge_base": runtime["knowledge_base"],
         "message": f"已删除 source_file={req.source_file} 的父子索引记录。",
@@ -335,17 +338,18 @@ def update_document_chunks(req: SourceFileRequest):
     vectorstore = runtime["vectorstore"]
     es_parent_index_name = str(runtime["es_parent_index_name"])
     es_index_name = str(runtime["es_index_name"])
+    remote_service = get_remote_retrieval_service()
 
     deleted_parent_count = delete_by_source_file(req.source_file, parent_vectorstore)
     deleted_vector_count = delete_by_source_file(req.source_file, vectorstore)
-    deleted_parent_es_count = delete_by_source_file_in_es(req.source_file, index_name=es_parent_index_name)
-    deleted_es_count = delete_by_source_file_in_es(req.source_file, index_name=es_index_name)
+    deleted_parent_es_count = remote_service.delete_by_source_file_in_es(req.source_file, index_name=es_parent_index_name)
+    deleted_es_count = remote_service.delete_by_source_file_in_es(req.source_file, index_name=es_index_name)
     parent_doc, chunks = build_index_documents(file_path, docs_dir)
     parent_docs = [parent_doc] if parent_doc is not None else []
     parent_upsert_result = upsert_chunks(parent_docs, parent_vectorstore)
     upsert_result = upsert_chunks(chunks, vectorstore)
-    parent_es_upsert_result = upsert_chunks_to_es(parent_docs, index_name=es_parent_index_name)
-    child_es_upsert_result = upsert_chunks_to_es(chunks, index_name=es_index_name)
+    parent_es_upsert_result = remote_service.upsert_chunks_to_es(parent_docs, index_name=es_parent_index_name)
+    child_es_upsert_result = remote_service.upsert_chunks_to_es(chunks, index_name=es_index_name)
     es_sync_message = "" if parent_es_upsert_result["enabled"] and child_es_upsert_result["enabled"] else "，但未启用 ES BM25，同步已跳过"
 
     return {

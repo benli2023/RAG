@@ -20,11 +20,11 @@ def _load_backend_attr(module_name: str, attr_name: str):
     return getattr(module, attr_name)
 
 
-get_es_client = _load_backend_attr("es_service", "get_es_client")
 ES_INDEX_NAME = _load_backend_attr("rag_config", "ES_INDEX_NAME")
 DEFAULT_KNOWLEDGE_BASE = _load_backend_attr("rag_config", "DEFAULT_KNOWLEDGE_BASE")
 get_vectorstore = _load_backend_attr("rag_store", "get_vectorstore")
 get_remote_retrieval_service = _load_backend_attr("remote_retrieval_service", "get_remote_retrieval_service")
+remote_es_service = get_remote_retrieval_service()
 run_retrieval_pipeline = get_remote_retrieval_service().run_retrieval_pipeline
 vectorstore = get_vectorstore(DEFAULT_KNOWLEDGE_BASE)
 
@@ -155,14 +155,10 @@ def _load_cases(case_file: str | None, query: str | None, username: str) -> list
 
 def _collect_index_health() -> dict[str, Any]:
     vector_count = int(vectorstore.count())
-    client = get_es_client()
-    es_count = None
-    es_available = client is not None
-    if client is not None:
-        if client.indices.exists(index=ES_INDEX_NAME):
-            es_count = int(client.count(index=ES_INDEX_NAME).get("count", 0))
-        else:
-            es_count = 0
+    runtime = remote_es_service.get_es_runtime_config([ES_INDEX_NAME])
+    es_available = bool(runtime.get("available"))
+    counts_by_name = runtime.get("document_counts_by_name", {})
+    es_count = counts_by_name.get(ES_INDEX_NAME) if isinstance(counts_by_name, dict) else None
 
     return {
         "vector_count": vector_count,

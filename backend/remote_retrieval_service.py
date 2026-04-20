@@ -25,6 +25,33 @@ TRACE_DOCUMENT_LIST_KEYS = {
 }
 
 
+def _serialize_document(document: Document) -> pb2.EsDocument:
+    return pb2.EsDocument(
+        page_content=document.page_content,
+        metadata_json=json.dumps(document.metadata or {}, ensure_ascii=False, default=str),
+    )
+
+
+def _raise_for_rpc_error(operation: str, exc: grpc.RpcError) -> None:
+    if exc.code() in {grpc.StatusCode.INVALID_ARGUMENT, grpc.StatusCode.NOT_FOUND}:
+        raise ValueError(exc.details()) from exc
+    raise RuntimeError(
+        f"Remote RPC {operation} failed: {exc.code().name}: {exc.details()}"
+    ) from exc
+
+
+def _decode_json_payload(payload_text: str, error_message: str) -> dict:
+    try:
+        payload = json.loads(payload_text) if payload_text else {}
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(error_message) from exc
+
+    if not isinstance(payload, dict):
+        return {}
+
+    return payload
+
+
 def _restore_document(value: object) -> object:
     if isinstance(value, dict) and "page_content" in value and "metadata" in value:
         return Document(
@@ -90,19 +117,12 @@ class RemoteRetrievalService:
         try:
             response = self.stub.Retrieve(request)
         except grpc.RpcError as exc:
-            if exc.code() in {grpc.StatusCode.INVALID_ARGUMENT, grpc.StatusCode.NOT_FOUND}:
-                raise ValueError(exc.details()) from exc
-            raise RuntimeError(
-                f"Remote retrieval RPC failed: {exc.code().name}: {exc.details()}"
-            ) from exc
+            _raise_for_rpc_error("Retrieve", exc)
 
-        try:
-            payload = json.loads(response.response_json) if response.response_json else {}
-        except json.JSONDecodeError as exc:
-            raise RuntimeError("Remote retrieval RPC returned invalid JSON payload") from exc
-
-        if not isinstance(payload, dict):
-            payload = {}
+        payload = _decode_json_payload(
+            response.response_json,
+            "Remote retrieval RPC returned invalid JSON payload",
+        )
 
         response_payload = payload.get("response", {})
         trace_payload = _restore_trace_payload(payload.get("trace"))
@@ -112,6 +132,65 @@ class RemoteRetrievalService:
             "response": response_payload,
             "trace": trace_payload,
         }
+
+    def upsert_chunks_to_es(self, chunks: list[Document], index_name: str) -> dict:
+        request = pb2.UpsertEsChunksRequest(
+            index_name=index_name or "",
+            chunks=[_serialize_document(document) for document in chunks],
+        )
+
+        try:
+            response = self.stub.UpsertEsChunks(request)
+        except grpc.RpcError as exc:
+            _raise_for_rpc_error("UpsertEsChunks", exc)
+
+        return {
+            "enabled": response.enabled,
+            "index_name": response.index_name or index_name,
+            "indexed_count": response.indexed_count,
+            "sync_seconds": response.sync_seconds,
+        }
+
+    def delete_by_source_file_in_es(self, source_file: str, index_name: str) -> int:
+        request = pb2.DeleteBySourceFileInEsRequest(
+            index_name=index_name or "",
+            source_file=source_file,
+        )
+
+        try:
+            response = self.stub.DeleteBySourceFileInEs(request)
+        except grpc.RpcError as exc:
+            _raise_for_rpc_error("DeleteBySourceFileInEs", exc)
+
+        return int(response.deleted_count)
+
+    def clear_es_index(self, index_name: str, recreate: bool = False) -> int:
+        request = pb2.ClearEsIndexRequest(
+            index_name=index_name or "",
+            recreate=recreate,
+        )
+
+        try:
+            response = self.stub.ClearEsIndex(request)
+        except grpc.RpcError as exc:
+            _raise_for_rpc_error("ClearEsIndex", exc)
+
+        return int(response.deleted_count)
+
+    def get_es_runtime_config(self, index_names: list[str] | None = None) -> dict:
+        request = pb2.GetEsRuntimeConfigRequest(
+            index_names=list(index_names or []),
+        )
+
+        try:
+            response = self.stub.GetEsRuntimeConfig(request)
+        except grpc.RpcError as exc:
+            _raise_for_rpc_error("GetEsRuntimeConfig", exc)
+
+        return _decode_json_payload(
+            response.runtime_json,
+            "Remote ES RPC returned invalid JSON payload",
+        )
 
 
 @lru_cache(maxsize=1)

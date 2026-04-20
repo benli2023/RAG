@@ -464,6 +464,7 @@ def get_es_runtime_config(index_names: list[str] | None = None) -> dict[str, Any
         "analyzer_mode": "disabled" if not ES_ENABLED else "unknown",
         "analyzer_modes_by_index": {},
         "index_exists_by_name": {},
+        "document_counts_by_name": {},
         "ik_fallback_active": False,
         "unavailable_reason": _es_unavailable_reason,
     }
@@ -489,6 +490,8 @@ def get_es_runtime_config(index_names: list[str] | None = None) -> dict[str, Any
     for index_name in resolved_index_names:
         exists = bool(client.indices.exists(index=index_name))
         index_exists_by_name[index_name] = exists
+        document_count = int(client.count(index=index_name).get("count", 0)) if exists else 0
+        runtime["document_counts_by_name"][index_name] = document_count
         if not exists:
             continue
 

@@ -18,6 +18,7 @@ import grpc
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 
+import es_service
 import proto.vector_database_pb2 as pb2
 import proto.vector_database_pb2_grpc as pb2_grpc
 from local_vector_database import LocalVectorDatabase
@@ -192,6 +193,52 @@ class VectorDatabaseServicer(pb2_grpc.VectorDatabaseServiceServicer):
         return pb2.RetrieveResponse(
             status=result.get("status", "success"),
             response_json=json.dumps(_json_safe_value(result), ensure_ascii=False),
+        )
+
+    def UpsertEsChunks(self, request, context):
+        self._log_request(context, "UpsertEsChunks", request.index_name)
+        chunks: list[Document] = []
+
+        for chunk in request.chunks:
+            try:
+                metadata = json.loads(chunk.metadata_json) if chunk.metadata_json else {}
+            except json.JSONDecodeError:
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, "chunk metadata_json must be valid JSON")
+
+            if not isinstance(metadata, dict):
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, "chunk metadata_json must decode to an object")
+
+            chunks.append(Document(page_content=chunk.page_content, metadata=metadata))
+
+        result = es_service.upsert_chunks_to_es(chunks, index_name=request.index_name or es_service.ES_INDEX_NAME)
+        return pb2.UpsertEsChunksResponse(
+            enabled=result["enabled"],
+            index_name=result["index_name"],
+            indexed_count=result["indexed_count"],
+            sync_seconds=result["sync_seconds"],
+        )
+
+    def DeleteBySourceFileInEs(self, request, context):
+        self._log_request(context, "DeleteBySourceFileInEs", request.index_name)
+        deleted = es_service.delete_by_source_file_in_es(
+            request.source_file,
+            index_name=request.index_name or es_service.ES_INDEX_NAME,
+        )
+        return pb2.DeleteResponse(deleted_count=deleted)
+
+    def ClearEsIndex(self, request, context):
+        self._log_request(context, "ClearEsIndex", request.index_name)
+        deleted = es_service.clear_es_index(
+            index_name=request.index_name or es_service.ES_INDEX_NAME,
+            recreate=request.recreate,
+        )
+        return pb2.ClearResponse(deleted_count=deleted)
+
+    def GetEsRuntimeConfig(self, request, context):
+        self._log_request(context, "GetEsRuntimeConfig", ",".join(request.index_names))
+        runtime = es_service.get_es_runtime_config(list(request.index_names) or None)
+        return pb2.GetEsRuntimeConfigResponse(
+            runtime_json=json.dumps(runtime, ensure_ascii=False),
         )
 
 

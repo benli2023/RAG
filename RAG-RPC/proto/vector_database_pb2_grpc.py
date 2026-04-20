@@ -69,6 +69,26 @@ class VectorDatabaseServiceStub(object):
                 request_serializer=proto_dot_vector__database__pb2.RetrieveRequest.SerializeToString,
                 response_deserializer=proto_dot_vector__database__pb2.RetrieveResponse.FromString,
                 _registered_method=True)
+        self.UpsertEsChunks = channel.unary_unary(
+                '/vectordb.VectorDatabaseService/UpsertEsChunks',
+                request_serializer=proto_dot_vector__database__pb2.UpsertEsChunksRequest.SerializeToString,
+                response_deserializer=proto_dot_vector__database__pb2.UpsertEsChunksResponse.FromString,
+                _registered_method=True)
+        self.DeleteBySourceFileInEs = channel.unary_unary(
+                '/vectordb.VectorDatabaseService/DeleteBySourceFileInEs',
+                request_serializer=proto_dot_vector__database__pb2.DeleteBySourceFileInEsRequest.SerializeToString,
+                response_deserializer=proto_dot_vector__database__pb2.DeleteResponse.FromString,
+                _registered_method=True)
+        self.ClearEsIndex = channel.unary_unary(
+                '/vectordb.VectorDatabaseService/ClearEsIndex',
+                request_serializer=proto_dot_vector__database__pb2.ClearEsIndexRequest.SerializeToString,
+                response_deserializer=proto_dot_vector__database__pb2.ClearResponse.FromString,
+                _registered_method=True)
+        self.GetEsRuntimeConfig = channel.unary_unary(
+                '/vectordb.VectorDatabaseService/GetEsRuntimeConfig',
+                request_serializer=proto_dot_vector__database__pb2.GetEsRuntimeConfigRequest.SerializeToString,
+                response_deserializer=proto_dot_vector__database__pb2.GetEsRuntimeConfigResponse.FromString,
+                _registered_method=True)
 
 
 class VectorDatabaseServiceServicer(object):
@@ -116,6 +136,30 @@ class VectorDatabaseServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def UpsertEsChunks(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DeleteBySourceFileInEs(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ClearEsIndex(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetEsRuntimeConfig(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_VectorDatabaseServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -153,6 +197,26 @@ def add_VectorDatabaseServiceServicer_to_server(servicer, server):
                     servicer.Retrieve,
                     request_deserializer=proto_dot_vector__database__pb2.RetrieveRequest.FromString,
                     response_serializer=proto_dot_vector__database__pb2.RetrieveResponse.SerializeToString,
+            ),
+            'UpsertEsChunks': grpc.unary_unary_rpc_method_handler(
+                    servicer.UpsertEsChunks,
+                    request_deserializer=proto_dot_vector__database__pb2.UpsertEsChunksRequest.FromString,
+                    response_serializer=proto_dot_vector__database__pb2.UpsertEsChunksResponse.SerializeToString,
+            ),
+            'DeleteBySourceFileInEs': grpc.unary_unary_rpc_method_handler(
+                    servicer.DeleteBySourceFileInEs,
+                    request_deserializer=proto_dot_vector__database__pb2.DeleteBySourceFileInEsRequest.FromString,
+                    response_serializer=proto_dot_vector__database__pb2.DeleteResponse.SerializeToString,
+            ),
+            'ClearEsIndex': grpc.unary_unary_rpc_method_handler(
+                    servicer.ClearEsIndex,
+                    request_deserializer=proto_dot_vector__database__pb2.ClearEsIndexRequest.FromString,
+                    response_serializer=proto_dot_vector__database__pb2.ClearResponse.SerializeToString,
+            ),
+            'GetEsRuntimeConfig': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetEsRuntimeConfig,
+                    request_deserializer=proto_dot_vector__database__pb2.GetEsRuntimeConfigRequest.FromString,
+                    response_serializer=proto_dot_vector__database__pb2.GetEsRuntimeConfigResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -344,6 +408,114 @@ class VectorDatabaseService(object):
             '/vectordb.VectorDatabaseService/Retrieve',
             proto_dot_vector__database__pb2.RetrieveRequest.SerializeToString,
             proto_dot_vector__database__pb2.RetrieveResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def UpsertEsChunks(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/vectordb.VectorDatabaseService/UpsertEsChunks',
+            proto_dot_vector__database__pb2.UpsertEsChunksRequest.SerializeToString,
+            proto_dot_vector__database__pb2.UpsertEsChunksResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DeleteBySourceFileInEs(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/vectordb.VectorDatabaseService/DeleteBySourceFileInEs',
+            proto_dot_vector__database__pb2.DeleteBySourceFileInEsRequest.SerializeToString,
+            proto_dot_vector__database__pb2.DeleteResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ClearEsIndex(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/vectordb.VectorDatabaseService/ClearEsIndex',
+            proto_dot_vector__database__pb2.ClearEsIndexRequest.SerializeToString,
+            proto_dot_vector__database__pb2.ClearResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetEsRuntimeConfig(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/vectordb.VectorDatabaseService/GetEsRuntimeConfig',
+            proto_dot_vector__database__pb2.GetEsRuntimeConfigRequest.SerializeToString,
+            proto_dot_vector__database__pb2.GetEsRuntimeConfigResponse.FromString,
             options,
             channel_credentials,
             insecure,
