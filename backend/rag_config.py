@@ -67,6 +67,14 @@ def _build_runtime_health() -> dict[str, object]:
 		field_severities["access_control.enable_acl"] = "error"
 		field_severities["access_control.username_group_mapping_exists"] = "error"
 
+	if ENABLE_ACL and not KNOWLEDGE_BASE_GROUP_MAPPING_FILE.is_file():
+		alerts.append({
+			"severity": "warning",
+			"title": "ACL 已开启，但知识库组映射文件缺失",
+			"message": "当前启用了知识库访问控制，但 knowledge_base_group_mapping.json 不存在。知识库选择将回退为不限制访问。",
+		})
+		field_severities["access_control.knowledge_base_group_mapping_exists"] = "warning"
+
 	if DASHBOARD_DIR.exists() and not DASHBOARD_INDEX.is_file():
 		alerts.append({
 			"severity": "error",
@@ -187,10 +195,12 @@ RERANKER_DEVICE = os.getenv("RERANKER_DEVICE", "cpu")
 
 # 是否启用文档访问控制 ACL
 # 可直接修改这里；如需按环境覆盖，可设置 ENABLE_ACL=true/false
-ENABLE_ACL = _get_bool_config("ENABLE_ACL", False)
+ENABLE_ACL = _get_bool_config("ENABLE_ACL", True)
 # 是否启用更细粒度的子分块切分
 # 可直接修改这里；如需按环境覆盖，可设置 ENABLE_SUB_CHUNKING=true/false
 ENABLE_SUB_CHUNKING = _get_bool_config("ENABLE_SUB_CHUNKING", False)
+# 用户组与知识库访问关系映射配置文件
+KNOWLEDGE_BASE_GROUP_MAPPING_FILE = Path(__file__).resolve().parent / "knowledge_base_group_mapping.json"
 
 # ==================== 前端页面配置 ====================
 
@@ -214,6 +224,7 @@ def get_runtime_config() -> dict[str, object]:
 			"docs_dir": str(DOCS_DIR),
 			"default_knowledge_base": DEFAULT_KNOWLEDGE_BASE,
 			"username_group_mapping_file": str(USERNAME_GROUP_MAPPING_FILE),
+			"knowledge_base_group_mapping_file": str(KNOWLEDGE_BASE_GROUP_MAPPING_FILE),
 			"dashboard_dir": str(DASHBOARD_DIR),
 			"dashboard_index": str(DASHBOARD_INDEX),
 		},
@@ -250,6 +261,7 @@ def get_runtime_config() -> dict[str, object]:
 		"access_control": {
 			"enable_acl": ENABLE_ACL,
 			"username_group_mapping_exists": USERNAME_GROUP_MAPPING_FILE.is_file(),
+			"knowledge_base_group_mapping_exists": KNOWLEDGE_BASE_GROUP_MAPPING_FILE.is_file(),
 		},
 		"chunking": {
 			"enable_sub_chunking": ENABLE_SUB_CHUNKING,

@@ -190,6 +190,25 @@ ACL 和子分块的临时覆盖方式相同：
 ENABLE_ACL=true ENABLE_SUB_CHUNKING=true python backend/server.py
 ```
 
+如果你要按用户组限制可见的知识库，可以编辑 `backend/knowledge_base_group_mapping.json`。这个文件定义的是“用户组 -> 知识库列表”的允许关系，和现有的 `backend/username_group_mapping.json` 配合使用。
+
+示例：
+
+```json
+{
+    "iam-admin": ["shop", "shop1"],
+    "order-admin": ["shop"],
+    "user-support": ["shop1"]
+}
+```
+
+规则如下：
+
+- `username_group_mapping.json` 负责“用户名 -> 用户组”。
+- `knowledge_base_group_mapping.json` 负责“用户组 -> 允许访问的知识库”。
+- 当 `ENABLE_ACL=true` 时，`/retrieve` 会先检查用户是否有当前知识库权限，再执行检索。
+- 如果 `knowledge_base_group_mapping.json` 为空或不存在，知识库访问会回退为不限制，便于逐步启用。
+
 另外可以通过只读接口查看当前生效配置：
 
 ```bash

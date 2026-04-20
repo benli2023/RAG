@@ -13,15 +13,17 @@ from pathlib import Path
 
 import frontmatter
 import yaml
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from access_control import ANONYMOUS_USERNAME
+from access_control import is_knowledge_base_accessible
+from access_control import resolve_accessible_knowledge_bases
 from access_control import resolve_accessible_query_scope
 from api_models import QueryRequest, SourceFileRequest
 from documents_service import assert_document_access, build_index_documents, list_docs_markdown_files, normalize_docs_relative_path
 from knowledge_base_service import get_child_es_index_name, get_knowledge_base_dir, get_module_directory_file, get_parent_es_index_name, list_knowledge_bases, normalize_knowledge_base_name
-from rag_config import DASHBOARD_DIR, DASHBOARD_INDEX, DEFAULT_KNOWLEDGE_BASE, ENABLE_ACL, ENABLE_HTTPS, ENABLE_PARENT_CHILD_RETRIEVAL, ENABLE_SUB_CHUNKING, USERNAME_GROUP_MAPPING_FILE, get_runtime_config
+from rag_config import DASHBOARD_DIR, DASHBOARD_INDEX, DEFAULT_KNOWLEDGE_BASE, ENABLE_ACL, ENABLE_HTTPS, ENABLE_PARENT_CHILD_RETRIEVAL, ENABLE_SUB_CHUNKING, KNOWLEDGE_BASE_GROUP_MAPPING_FILE, USERNAME_GROUP_MAPPING_FILE, get_runtime_config
 from rag_store import get_parent_vectorstore, get_vectorstore
 from remote_retrieval_service import get_remote_retrieval_service
 from retrieval_strategy_config import get_routing_runtime_config, normalize_query_type
@@ -94,10 +96,22 @@ def get_module_directory_response(knowledge_base: str | None = None) -> dict:
 
 
 @app.get("/knowledge-bases")
-def list_available_knowledge_bases():
+def list_available_knowledge_bases(username: str = ANONYMOUS_USERNAME):
+    knowledge_bases = list_knowledge_bases()
+    if ENABLE_ACL:
+        accessible_knowledge_bases, _ = resolve_accessible_knowledge_bases(
+            username,
+            knowledge_bases,
+            USERNAME_GROUP_MAPPING_FILE,
+            KNOWLEDGE_BASE_GROUP_MAPPING_FILE,
+        )
+    else:
+        accessible_knowledge_bases = knowledge_bases
     return {
         "default_knowledge_base": DEFAULT_KNOWLEDGE_BASE,
-        "knowledge_bases": list_knowledge_bases(),
+        "knowledge_bases": knowledge_bases,
+        "accessible_knowledge_bases": accessible_knowledge_bases,
+        "username": username,
     }
 
 # ================= 4. [入库 API] 带元数据解析的自定义切片 =================
@@ -256,7 +270,11 @@ def get_dashboard_page():
 
 
 @app.get("/docs/content/{path:path}")
-def get_document_content(path: str, username: str = ANONYMOUS_USERNAME, knowledge_base: str = DEFAULT_KNOWLEDGE_BASE):
+def get_document_content(
+    path: str,
+    knowledge_base: str = DEFAULT_KNOWLEDGE_BASE,
+    username: str = Header(default=ANONYMOUS_USERNAME, alias="X-Username")
+):
     runtime = _resolve_knowledge_base_runtime(knowledge_base)
     docs_dir = runtime["docs_dir"]
     try:
@@ -294,7 +312,30 @@ def list_documents(knowledge_base: str = DEFAULT_KNOWLEDGE_BASE):
 
 
 @app.get("/docs/module-directory")
-def get_module_directory(knowledge_base: str = DEFAULT_KNOWLEDGE_BASE):
+def get_module_directory(
+    knowledge_base: str = DEFAULT_KNOWLEDGE_BASE,
+    username: str | None = Header(default=None, alias="X-Username")
+):
+    normalized_username = username.strip() if isinstance(username, str) else ''
+    if ENABLE_ACL and not normalized_username:
+        raise HTTPException(status_code=401, detail={
+            "status": "unauthorized",
+            "message": "缺少 X-Username 请求头，无法获取模块目录。"
+        })
+
+    if ENABLE_ACL and not is_knowledge_base_accessible(
+        normalized_username,
+        knowledge_base,
+        USERNAME_GROUP_MAPPING_FILE,
+        KNOWLEDGE_BASE_GROUP_MAPPING_FILE,
+    ):
+        raise HTTPException(status_code=403, detail={
+            "status": "forbidden",
+            "message": f"用户 {normalized_username} 无权访问知识库 {normalize_knowledge_base_name(knowledge_base)} 的模块目录。",
+            "username": normalized_username,
+            "knowledge_base": normalize_knowledge_base_name(knowledge_base),
+        })
+
     try:
         return get_module_directory_response(knowledge_base)
     except FileNotFoundError as exc:
@@ -382,6 +423,18 @@ def retrieve_context(req: QueryRequest):
     try:
         normalize_query_type(req.query_type)
         runtime = _resolve_knowledge_base_runtime(req.knowledge_base)
+        normalized_knowledge_base = str(runtime["knowledge_base"])
+        if ENABLE_ACL and not is_knowledge_base_accessible(
+            req.username,
+            normalized_knowledge_base,
+            USERNAME_GROUP_MAPPING_FILE,
+            KNOWLEDGE_BASE_GROUP_MAPPING_FILE,
+        ):
+            return {
+                "status": "forbidden",
+                "message": f"当前账号没有访问知识库 {normalized_knowledge_base} 的权限。",
+                "knowledge_base": normalized_knowledge_base,
+            }
         if ENABLE_ACL:
             authorized_domains, authorized_source_files = resolve_accessible_query_scope(
                 req.username,

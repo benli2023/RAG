@@ -5,12 +5,14 @@ from typing import Any
 
 import frontmatter
 
+from knowledge_base_service import list_knowledge_bases, normalize_knowledge_base_name
 from rag_config import ENABLE_ACL
 
 ANONYMOUS_USERNAME = "anonymous"
 PUBLIC_SUBJECT = "*"
 AUTHENTICATED_SUBJECT = "$authenticated"
 GROUP_SUBJECT_PREFIX = "group:"
+ALL_KNOWLEDGE_BASES = "*"
 
 
 def normalize_username(username: str | None) -> str:
@@ -95,6 +97,60 @@ def load_username_group_mapping(mapping_file: Path) -> dict[str, set[str]]:
     return mapping
 
 
+def coerce_knowledge_base_list(value: Any) -> set[str]:
+    if isinstance(value, str):
+        parts = [part.strip() for part in value.split(",")]
+        return {part for part in parts if part}
+
+    if isinstance(value, list):
+        return {
+            item.strip()
+            for item in value
+            if isinstance(item, str) and item.strip()
+        }
+
+    return set()
+
+
+def load_knowledge_base_group_mapping(mapping_file: Path) -> dict[str, set[str]]:
+    if not mapping_file.is_file():
+        return {}
+
+    try:
+        with open(mapping_file, "r", encoding="utf-8") as file_handle:
+            raw_mapping = json.load(file_handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"[ACL] failed to load knowledge base group mapping: {exc}")
+        return {}
+
+    if not isinstance(raw_mapping, dict):
+        print("[ACL] ignore knowledge base group mapping: root value must be a JSON object")
+        return {}
+
+    mapping: dict[str, set[str]] = {}
+    for raw_group_name, raw_knowledge_bases in raw_mapping.items():
+        if not isinstance(raw_group_name, str):
+            continue
+
+        group_name = normalize_group_name(raw_group_name)
+        knowledge_bases = set()
+
+        for raw_knowledge_base in coerce_knowledge_base_list(raw_knowledge_bases):
+            if raw_knowledge_base == ALL_KNOWLEDGE_BASES:
+                knowledge_bases.add(ALL_KNOWLEDGE_BASES)
+                continue
+
+            try:
+                knowledge_bases.add(normalize_knowledge_base_name(raw_knowledge_base))
+            except ValueError as exc:
+                print(f"[ACL] ignore invalid knowledge base mapping for group '{group_name}': {exc}")
+
+        if group_name and knowledge_bases:
+            mapping[group_name] = knowledge_bases
+
+    return mapping
+
+
 def parse_acl_subjects(metadata: dict[str, Any]) -> set[str]:
     acl = metadata.get("acl")
     if acl is None:
@@ -158,6 +214,75 @@ def resolve_user_subjects(username: str, group_mapping: dict[str, set[str]] | No
     resolved_group_mapping = group_mapping if group_mapping is not None else {}
     subjects.update(resolved_group_mapping.get(username, set()))
     return subjects
+
+
+def resolve_user_group_names(username: str, group_mapping: dict[str, set[str]] | None = None) -> set[str]:
+    subjects = resolve_user_subjects(normalize_username(username), group_mapping)
+    return {
+        subject[len(GROUP_SUBJECT_PREFIX):]
+        for subject in subjects
+        if subject.startswith(GROUP_SUBJECT_PREFIX) and subject[len(GROUP_SUBJECT_PREFIX):]
+    }
+
+
+def resolve_accessible_knowledge_bases(
+    username: str,
+    requested_knowledge_bases: list[str] | None,
+    username_group_mapping_file: Path,
+    knowledge_base_group_mapping_file: Path,
+) -> tuple[list[str], list[str]]:
+    normalized_requested = dedupe_values(requested_knowledge_bases or [])
+    group_mapping = load_username_group_mapping(username_group_mapping_file)
+    knowledge_base_group_mapping = load_knowledge_base_group_mapping(knowledge_base_group_mapping_file)
+
+    if not knowledge_base_group_mapping:
+        accessible = normalized_requested or list_knowledge_bases()
+        return accessible, []
+
+    user_group_names = resolve_user_group_names(username, group_mapping)
+    if not user_group_names:
+        candidate_knowledge_bases = normalized_requested or list_knowledge_bases()
+        return [], candidate_knowledge_bases
+
+    allowed_knowledge_bases: set[str] = set()
+    allow_all_knowledge_bases = False
+    for group_name in user_group_names:
+        group_knowledge_bases = knowledge_base_group_mapping.get(group_name, set())
+        if ALL_KNOWLEDGE_BASES in group_knowledge_bases:
+            allow_all_knowledge_bases = True
+            break
+        allowed_knowledge_bases.update(group_knowledge_bases)
+
+    candidate_knowledge_bases = normalized_requested or list_knowledge_bases()
+    if allow_all_knowledge_bases:
+        return candidate_knowledge_bases, []
+
+    accessible_knowledge_bases = [
+        knowledge_base
+        for knowledge_base in candidate_knowledge_bases
+        if knowledge_base in allowed_knowledge_bases
+    ]
+    restricted_knowledge_bases = [
+        knowledge_base
+        for knowledge_base in candidate_knowledge_bases
+        if knowledge_base not in accessible_knowledge_bases
+    ]
+    return dedupe_values(accessible_knowledge_bases), dedupe_values(restricted_knowledge_bases)
+
+
+def is_knowledge_base_accessible(
+    username: str,
+    knowledge_base: str,
+    username_group_mapping_file: Path,
+    knowledge_base_group_mapping_file: Path,
+) -> bool:
+    accessible_knowledge_bases, _ = resolve_accessible_knowledge_bases(
+        username,
+        [normalize_knowledge_base_name(knowledge_base)],
+        username_group_mapping_file,
+        knowledge_base_group_mapping_file,
+    )
+    return bool(accessible_knowledge_bases)
 
 
 def is_document_accessible(user_subjects: set[str], acl_subjects: set[str]) -> bool:
