@@ -1,0 +1,12 @@
+{
+	"iam-admin": [
+		"*"
+	],
+	"order-admin": [
+		"shop"
+	],
+	"user-support": [
+		"shop",
+		"shop1"
+	]
+}

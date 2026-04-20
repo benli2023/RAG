@@ -36,14 +36,14 @@ ES_ENABLED = _load_backend_attr("rag_config", "ES_ENABLED")
 ES_INDEX_NAME = get_child_es_index_name(DEFAULT_KNOWLEDGE_BASE)
 ES_PARENT_INDEX_NAME = get_parent_es_index_name(DEFAULT_KNOWLEDGE_BASE)
 list_docs_markdown_files = _load_backend_attr("documents_service", "list_docs_markdown_files")
-run_retrieval_pipeline = _load_backend_attr("retrieval_pipeline_service", "run_retrieval_pipeline")
+get_remote_retrieval_service = _load_backend_attr("remote_retrieval_service", "get_remote_retrieval_service")
+remote_es_service = get_remote_retrieval_service()
 get_vectorstore = _load_backend_attr("rag_store", "get_vectorstore")
 clear_vectorstore = _load_backend_attr("vectorstore_service", "clear_vectorstore")
 get_chunk_statistics = _load_backend_attr("vectorstore_service", "get_chunk_statistics")
-clear_es_index = _load_backend_attr("es_service", "clear_es_index")
-get_es_client = _load_backend_attr("es_service", "get_es_client")
 ingest_docs = _load_backend_attr("server", "ingest_docs")
 vectorstore = get_vectorstore(DEFAULT_KNOWLEDGE_BASE)
+run_retrieval_pipeline = get_remote_retrieval_service().run_retrieval_pipeline
 
 
 @dataclass
@@ -508,7 +508,7 @@ def _maybe_augment_corpus(enable: bool) -> dict[str, Any]:
 
 
 def _collect_index_health() -> dict[str, Any]:
-	vector_count = int(vectorstore._collection.count())
+	vector_count = int(vectorstore.count())
 	chunk_stats = get_chunk_statistics(vectorstore)
 
 	es_available = False
@@ -517,16 +517,12 @@ def _collect_index_health() -> dict[str, Any]:
 	es_error = None
 	if ES_ENABLED:
 		try:
-			client = get_es_client()
-			es_available = client is not None
-			if client is not None and client.indices.exists(index=ES_INDEX_NAME):
-				es_count = int(client.count(index=ES_INDEX_NAME).get("count", 0))
-			elif client is not None:
-				es_count = 0
-			if client is not None and client.indices.exists(index=ES_PARENT_INDEX_NAME):
-				parent_es_count = int(client.count(index=ES_PARENT_INDEX_NAME).get("count", 0))
-			elif client is not None:
-				parent_es_count = 0
+			runtime = remote_es_service.get_es_runtime_config([ES_INDEX_NAME, ES_PARENT_INDEX_NAME])
+			es_available = bool(runtime.get("available"))
+			counts_by_name = runtime.get("document_counts_by_name", {})
+			if isinstance(counts_by_name, dict):
+				es_count = counts_by_name.get(ES_INDEX_NAME)
+				parent_es_count = counts_by_name.get(ES_PARENT_INDEX_NAME)
 		except Exception as exc:
 			es_error = str(exc)
 
@@ -551,8 +547,8 @@ def _clear_and_rebuild_indexes() -> dict[str, Any]:
 
 	if ES_ENABLED:
 		try:
-			deleted_parent_es_count = clear_es_index(index_name=ES_PARENT_INDEX_NAME)
-			deleted_es_count = clear_es_index(index_name=ES_INDEX_NAME)
+			deleted_parent_es_count = remote_es_service.clear_es_index(index_name=ES_PARENT_INDEX_NAME)
+			deleted_es_count = remote_es_service.clear_es_index(index_name=ES_INDEX_NAME)
 		except Exception as exc:
 			es_error = str(exc)
 			raise

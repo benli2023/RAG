@@ -1,0 +1,12 @@
+grpcio
+grpcio-tools
+fastapi
+python-frontmatter
+langchain-core
+langchain-text-splitters
+langchain-chroma
+langchain-community
+langchain-huggingface
+sentence-transformers
+elasticsearch
+pydantic

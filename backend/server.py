@@ -1,20 +1,31 @@
 import os
 import sys
+import platform
+
+if platform.system() == "Linux":
+    try:
+        __import__("pysqlite3")
+        sys.modules["sqlite3"] = sys.modules.pop("pysqlite3")
+    except ImportError:
+        pass
+
 from pathlib import Path
 
 import frontmatter
 import yaml
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from access_control import ANONYMOUS_USERNAME
+from access_control import is_knowledge_base_accessible
+from access_control import resolve_accessible_knowledge_bases
+from access_control import resolve_accessible_query_scope
 from api_models import QueryRequest, SourceFileRequest
 from documents_service import assert_document_access, build_index_documents, list_docs_markdown_files, normalize_docs_relative_path
-from es_service import clear_es_index, delete_by_source_file_in_es, get_es_runtime_config, upsert_chunks_to_es
 from knowledge_base_service import get_child_es_index_name, get_knowledge_base_dir, get_module_directory_file, get_parent_es_index_name, list_knowledge_bases, normalize_knowledge_base_name
-from rag_config import DASHBOARD_DIR, DASHBOARD_INDEX, DEFAULT_KNOWLEDGE_BASE, ENABLE_ACL, ENABLE_PARENT_CHILD_RETRIEVAL, ENABLE_SUB_CHUNKING, get_runtime_config
-from rag_store import embedding_function, get_parent_vectorstore, get_vectorstore
-from retrieval_pipeline_service import run_retrieval_pipeline
+from rag_config import DASHBOARD_DIR, DASHBOARD_INDEX, DEFAULT_KNOWLEDGE_BASE, ENABLE_ACL, ENABLE_HTTPS, ENABLE_PARENT_CHILD_RETRIEVAL, ENABLE_SUB_CHUNKING, KNOWLEDGE_BASE_GROUP_MAPPING_FILE, USERNAME_GROUP_MAPPING_FILE, get_runtime_config
+from rag_store import get_parent_vectorstore, get_vectorstore
+from remote_retrieval_service import get_remote_retrieval_service
 from retrieval_strategy_config import get_routing_runtime_config, normalize_query_type
 from vectorstore_service import clear_vectorstore, delete_by_source_file, get_chunk_statistics, get_grouped_source_files_from_vectorstore, upsert_chunks
 
@@ -85,10 +96,22 @@ def get_module_directory_response(knowledge_base: str | None = None) -> dict:
 
 
 @app.get("/knowledge-bases")
-def list_available_knowledge_bases():
+def list_available_knowledge_bases(username: str = ANONYMOUS_USERNAME):
+    knowledge_bases = list_knowledge_bases()
+    if ENABLE_ACL:
+        accessible_knowledge_bases, _ = resolve_accessible_knowledge_bases(
+            username,
+            knowledge_bases,
+            USERNAME_GROUP_MAPPING_FILE,
+            KNOWLEDGE_BASE_GROUP_MAPPING_FILE,
+        )
+    else:
+        accessible_knowledge_bases = knowledge_bases
     return {
         "default_knowledge_base": DEFAULT_KNOWLEDGE_BASE,
-        "knowledge_bases": list_knowledge_bases(),
+        "knowledge_bases": knowledge_bases,
+        "accessible_knowledge_bases": accessible_knowledge_bases,
+        "username": username,
     }
 
 # ================= 4. [入库 API] 带元数据解析的自定义切片 =================
@@ -106,6 +129,7 @@ def ingest_docs(knowledge_base: str = DEFAULT_KNOWLEDGE_BASE):
     parent_docs = []
     final_chunks = []
     total_files = len(md_files)
+    remote_service = get_remote_retrieval_service()
     
     for file_index, file_path in enumerate(md_files, start=1):
         parent_doc, file_chunks = build_index_documents(file_path, docs_dir)
@@ -126,10 +150,10 @@ def ingest_docs(knowledge_base: str = DEFAULT_KNOWLEDGE_BASE):
             "knowledge_base": normalized_name,
             "message": f"未找到可入库的 Markdown 内容，共扫描 {len(md_files)} 个文件。",
         }
-    parent_upsert_result = upsert_chunks(parent_docs, embedding_function, parent_vectorstore)
-    upsert_result = upsert_chunks(final_chunks, embedding_function, vectorstore)
-    parent_es_upsert_result = upsert_chunks_to_es(parent_docs, index_name=es_parent_index_name)
-    child_es_upsert_result = upsert_chunks_to_es(final_chunks, index_name=es_index_name)
+    parent_upsert_result = upsert_chunks(parent_docs, parent_vectorstore)
+    upsert_result = upsert_chunks(final_chunks, vectorstore)
+    parent_es_upsert_result = remote_service.upsert_chunks_to_es(parent_docs, index_name=es_parent_index_name)
+    child_es_upsert_result = remote_service.upsert_chunks_to_es(final_chunks, index_name=es_index_name)
     es_sync_message = "并已同步检索索引。" if parent_es_upsert_result["enabled"] and child_es_upsert_result["enabled"] else "，但未启用 ES BM25，同步已跳过。"
     return {
         "knowledge_base": normalized_name,
@@ -162,8 +186,9 @@ def clear_index(knowledge_base: str = DEFAULT_KNOWLEDGE_BASE):
     es_index_name = str(runtime["es_index_name"])
     deleted_parent_count = clear_vectorstore(parent_vectorstore)
     deleted_vector_count = clear_vectorstore(vectorstore)
-    deleted_parent_es_count = clear_es_index(index_name=es_parent_index_name, recreate=True)
-    deleted_es_count = clear_es_index(index_name=es_index_name, recreate=True)
+    remote_service = get_remote_retrieval_service()
+    deleted_parent_es_count = remote_service.clear_es_index(index_name=es_parent_index_name, recreate=True)
+    deleted_es_count = remote_service.clear_es_index(index_name=es_index_name, recreate=True)
     return {
         "knowledge_base": normalized_name,
         "message": f"已清空检索索引，父文档索引删除 {deleted_parent_count} 条，子切片向量库删除 {deleted_vector_count} 条，父 BM25 索引删除 {deleted_parent_es_count} 条，子 BM25 索引删除 {deleted_es_count} 条。",
@@ -185,8 +210,9 @@ def rebuild_index(knowledge_base: str = DEFAULT_KNOWLEDGE_BASE):
     es_index_name = str(runtime["es_index_name"])
     deleted_parent_count = clear_vectorstore(parent_vectorstore)
     deleted_vector_count = clear_vectorstore(vectorstore)
-    deleted_parent_es_count = clear_es_index(index_name=es_parent_index_name, recreate=True)
-    deleted_es_count = clear_es_index(index_name=es_index_name, recreate=True)
+    remote_service = get_remote_retrieval_service()
+    deleted_parent_es_count = remote_service.clear_es_index(index_name=es_parent_index_name, recreate=True)
+    deleted_es_count = remote_service.clear_es_index(index_name=es_index_name, recreate=True)
     ingest_result = ingest_docs(knowledge_base=normalized_name)
     return {
         "knowledge_base": normalized_name,
@@ -222,7 +248,7 @@ def get_config(knowledge_base: str = DEFAULT_KNOWLEDGE_BASE):
     }
     runtime_config["indexing"]["child_es_index_name"] = runtime["es_index_name"]
     runtime_config["indexing"]["parent_es_index_name"] = runtime["es_parent_index_name"]
-    runtime_config["indexing"]["es_runtime"] = get_es_runtime_config([
+    runtime_config["indexing"]["es_runtime"] = get_remote_retrieval_service().get_es_runtime_config([
         str(runtime["es_index_name"]),
         str(runtime["es_parent_index_name"]),
     ])
@@ -244,7 +270,11 @@ def get_dashboard_page():
 
 
 @app.get("/docs/content/{path:path}")
-def get_document_content(path: str, username: str = ANONYMOUS_USERNAME, knowledge_base: str = DEFAULT_KNOWLEDGE_BASE):
+def get_document_content(
+    path: str,
+    knowledge_base: str = DEFAULT_KNOWLEDGE_BASE,
+    username: str = Header(default=ANONYMOUS_USERNAME, alias="X-Username")
+):
     runtime = _resolve_knowledge_base_runtime(knowledge_base)
     docs_dir = runtime["docs_dir"]
     try:
@@ -282,7 +312,30 @@ def list_documents(knowledge_base: str = DEFAULT_KNOWLEDGE_BASE):
 
 
 @app.get("/docs/module-directory")
-def get_module_directory(knowledge_base: str = DEFAULT_KNOWLEDGE_BASE):
+def get_module_directory(
+    knowledge_base: str = DEFAULT_KNOWLEDGE_BASE,
+    username: str | None = Header(default=None, alias="X-Username")
+):
+    normalized_username = username.strip() if isinstance(username, str) else ''
+    if ENABLE_ACL and not normalized_username:
+        raise HTTPException(status_code=401, detail={
+            "status": "unauthorized",
+            "message": "缺少 X-Username 请求头，无法获取模块目录。"
+        })
+
+    if ENABLE_ACL and not is_knowledge_base_accessible(
+        normalized_username,
+        knowledge_base,
+        USERNAME_GROUP_MAPPING_FILE,
+        KNOWLEDGE_BASE_GROUP_MAPPING_FILE,
+    ):
+        raise HTTPException(status_code=403, detail={
+            "status": "forbidden",
+            "message": f"用户 {normalized_username} 无权访问知识库 {normalize_knowledge_base_name(knowledge_base)} 的模块目录。",
+            "username": normalized_username,
+            "knowledge_base": normalize_knowledge_base_name(knowledge_base),
+        })
+
     try:
         return get_module_directory_response(knowledge_base)
     except FileNotFoundError as exc:
@@ -301,10 +354,11 @@ def list_grouped_documents_from_vectorstore(knowledge_base: str = DEFAULT_KNOWLE
 @app.post("/docs/delete")
 def delete_document_chunks(req: SourceFileRequest):
     runtime = _resolve_knowledge_base_runtime(req.knowledge_base)
+    remote_service = get_remote_retrieval_service()
     deleted_parent_count = delete_by_source_file(req.source_file, runtime["parent_vectorstore"])
     deleted_vector_count = delete_by_source_file(req.source_file, runtime["vectorstore"])
-    deleted_parent_es_count = delete_by_source_file_in_es(req.source_file, index_name=str(runtime["es_parent_index_name"]))
-    deleted_es_count = delete_by_source_file_in_es(req.source_file, index_name=str(runtime["es_index_name"]))
+    deleted_parent_es_count = remote_service.delete_by_source_file_in_es(req.source_file, index_name=str(runtime["es_parent_index_name"]))
+    deleted_es_count = remote_service.delete_by_source_file_in_es(req.source_file, index_name=str(runtime["es_index_name"]))
     return {
         "knowledge_base": runtime["knowledge_base"],
         "message": f"已删除 source_file={req.source_file} 的父子索引记录。",
@@ -326,17 +380,18 @@ def update_document_chunks(req: SourceFileRequest):
     vectorstore = runtime["vectorstore"]
     es_parent_index_name = str(runtime["es_parent_index_name"])
     es_index_name = str(runtime["es_index_name"])
+    remote_service = get_remote_retrieval_service()
 
     deleted_parent_count = delete_by_source_file(req.source_file, parent_vectorstore)
     deleted_vector_count = delete_by_source_file(req.source_file, vectorstore)
-    deleted_parent_es_count = delete_by_source_file_in_es(req.source_file, index_name=es_parent_index_name)
-    deleted_es_count = delete_by_source_file_in_es(req.source_file, index_name=es_index_name)
+    deleted_parent_es_count = remote_service.delete_by_source_file_in_es(req.source_file, index_name=es_parent_index_name)
+    deleted_es_count = remote_service.delete_by_source_file_in_es(req.source_file, index_name=es_index_name)
     parent_doc, chunks = build_index_documents(file_path, docs_dir)
     parent_docs = [parent_doc] if parent_doc is not None else []
-    parent_upsert_result = upsert_chunks(parent_docs, embedding_function, parent_vectorstore)
-    upsert_result = upsert_chunks(chunks, embedding_function, vectorstore)
-    parent_es_upsert_result = upsert_chunks_to_es(parent_docs, index_name=es_parent_index_name)
-    child_es_upsert_result = upsert_chunks_to_es(chunks, index_name=es_index_name)
+    parent_upsert_result = upsert_chunks(parent_docs, parent_vectorstore)
+    upsert_result = upsert_chunks(chunks, vectorstore)
+    parent_es_upsert_result = remote_service.upsert_chunks_to_es(parent_docs, index_name=es_parent_index_name)
+    child_es_upsert_result = remote_service.upsert_chunks_to_es(chunks, index_name=es_index_name)
     es_sync_message = "" if parent_es_upsert_result["enabled"] and child_es_upsert_result["enabled"] else "，但未启用 ES BM25，同步已跳过"
 
     return {
@@ -367,11 +422,35 @@ def update_document_chunks(req: SourceFileRequest):
 def retrieve_context(req: QueryRequest):
     try:
         normalize_query_type(req.query_type)
-        pipeline_result = run_retrieval_pipeline(
+        runtime = _resolve_knowledge_base_runtime(req.knowledge_base)
+        normalized_knowledge_base = str(runtime["knowledge_base"])
+        if ENABLE_ACL and not is_knowledge_base_accessible(
+            req.username,
+            normalized_knowledge_base,
+            USERNAME_GROUP_MAPPING_FILE,
+            KNOWLEDGE_BASE_GROUP_MAPPING_FILE,
+        ):
+            return {
+                "status": "forbidden",
+                "message": f"当前账号没有访问知识库 {normalized_knowledge_base} 的权限。",
+                "knowledge_base": normalized_knowledge_base,
+            }
+        if ENABLE_ACL:
+            authorized_domains, authorized_source_files = resolve_accessible_query_scope(
+                req.username,
+                req.domains,
+                req.source_files,
+                runtime["docs_dir"],
+                USERNAME_GROUP_MAPPING_FILE,
+            )
+        else:
+            authorized_domains = list(req.domains or [])
+            authorized_source_files = list(req.source_files or [])
+        pipeline_result = get_remote_retrieval_service().run_retrieval_pipeline(
             query=req.query,
             username=req.username,
-            domains=req.domains,
-            source_files=req.source_files,
+            domains=authorized_domains,
+            source_files=authorized_source_files,
             query_type=req.query_type,
             top_k=req.top_k,
             knowledge_base=req.knowledge_base,
@@ -379,9 +458,26 @@ def retrieve_context(req: QueryRequest):
         )
     except (ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     return pipeline_result["response"]
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    
+    server_kwargs = {
+        "app": app,
+        "host": "0.0.0.0",
+        "port": 8000,
+    }
+
+    if ENABLE_HTTPS:
+        from rag_config import SERVER_CRT, SERVER_KEY
+        server_kwargs["ssl_certfile"] = str(SERVER_CRT)
+        server_kwargs["ssl_keyfile"] = str(SERVER_KEY)
+        print("Starting server with HTTPS enabled.")
+    else:
+        print("Starting server with HTTPS disabled (HTTP).")
+
+    uvicorn.run(**server_kwargs)

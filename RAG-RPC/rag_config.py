@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 
+RAG_RPC_DIR = Path(__file__).resolve().parent
 RAG_CONFIG_PATH = os.getenv("RAG_CONFIG_PATH", str(Path(__file__).resolve().parent / "config.json"))
 try:
 	with open(RAG_CONFIG_PATH, "r", encoding="utf-8") as _f:
@@ -14,6 +15,22 @@ if os.path.isabs(_certs_dir):
 	CERTS_DIR = Path(_certs_dir)
 else:
 	CERTS_DIR = Path(__file__).resolve().parent / _certs_dir
+
+
+def _get_path_config(name: str, default: str, env_name: str | None = None) -> Path:
+	if env_name is not None:
+		env_value = os.getenv(env_name)
+		if env_value:
+			raw_value = env_value
+		else:
+			raw_value = _rag_config_json.get(name, default)
+	else:
+		raw_value = _rag_config_json.get(name, default)
+	path = Path(str(raw_value)).expanduser()
+	if path.is_absolute():
+		return path.resolve()
+
+	return (RAG_RPC_DIR / path).resolve()
 
 SERVER_CRT = CERTS_DIR / _rag_config_json.get("server", {}).get("crt", "server.crt")
 SERVER_KEY = CERTS_DIR / _rag_config_json.get("server", {}).get("key", "server.key")
@@ -67,14 +84,6 @@ def _build_runtime_health() -> dict[str, object]:
 		field_severities["access_control.enable_acl"] = "error"
 		field_severities["access_control.username_group_mapping_exists"] = "error"
 
-	if ENABLE_ACL and not KNOWLEDGE_BASE_GROUP_MAPPING_FILE.is_file():
-		alerts.append({
-			"severity": "warning",
-			"title": "ACL 已开启，但知识库组映射文件缺失",
-			"message": "当前启用了知识库访问控制，但 knowledge_base_group_mapping.json 不存在。知识库选择将回退为不限制访问。",
-		})
-		field_severities["access_control.knowledge_base_group_mapping_exists"] = "warning"
-
 	if DASHBOARD_DIR.exists() and not DASHBOARD_INDEX.is_file():
 		alerts.append({
 			"severity": "error",
@@ -123,9 +132,9 @@ def _build_runtime_health() -> dict[str, object]:
 # ==================== 路径配置 ====================
 
 # 项目根目录
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(os.getenv("PROJECT_ROOT", str(RAG_RPC_DIR.parent))).expanduser().resolve()
 # 文档知识库目录
-DOCS_DIR = PROJECT_ROOT / "docs"
+DOCS_DIR = Path(os.getenv("DOCS_DIR", str(PROJECT_ROOT / "docs"))).expanduser().resolve()
 # 默认知识库名称
 DEFAULT_KNOWLEDGE_BASE = os.getenv("DEFAULT_KNOWLEDGE_BASE", "shop").strip() or "shop"
 # 用户与权限组映射配置文件
@@ -133,14 +142,26 @@ USERNAME_GROUP_MAPPING_FILE = Path(__file__).resolve().parent / "username_group_
 
 # ==================== 索引与模型配置 ====================
 
-# 远程向量数据库连接地址
-REMOTE_DB_TARGET = _rag_config_json.get("REMOTE_DB_TARGET", "localhost:50051")
-# 远程向量数据库证书路径
-REMOTE_DB_CERT = os.getenv("REMOTE_DB_CERT", str(RPC_CRT))
+# 本地嵌入模型目录
+LOCAL_MODEL_PATH = _get_path_config("local_model_path", "../my_local_bge_m3", "LOCAL_MODEL_PATH")
+# 嵌入模型标识；本地目录存在时优先使用本地模型
+EMBEDDING_MODEL_NAME = os.getenv(
+	"EMBEDDING_MODEL_NAME",
+	str(LOCAL_MODEL_PATH) if LOCAL_MODEL_PATH.exists() else "BAAI/bge-m3",
+)
+# 嵌入模型推理设备
+EMBEDDING_DEVICE = os.getenv("EMBEDDING_DEVICE", "cpu")
+# 向量数据库存储目录
+DB_DIR = _get_path_config("db_dir", "chroma_db", "DB_DIR")
 # 本地 Reranker 模型目录
-LOCAL_RERANKER_PATH = PROJECT_ROOT / "my_local_bge_reranker"
+LOCAL_RERANKER_PATH = _get_path_config("local_reranker_path", "../my_local_bge_reranker", "LOCAL_RERANKER_PATH")
 # Elasticsearch 连接地址
 ES_URL = _rag_config_json.get("ES_URL", "https://localhost:9200")
+# 是否启用 print 输出日志
+PRINT_LOGGING_ENABLED = _parse_bool(
+	os.getenv("PRINT_LOGGING_ENABLED"),
+	_parse_bool(_rag_config_json.get("print_logging_enabled"), True),
+)
 # Elasticsearch 子切片倒排索引名称
 ES_INDEX_NAME = os.getenv("ES_INDEX_NAME", "rag_docs_bm25")
 # Elasticsearch 父文档倒排索引名称
@@ -195,12 +216,10 @@ RERANKER_DEVICE = os.getenv("RERANKER_DEVICE", "cpu")
 
 # 是否启用文档访问控制 ACL
 # 可直接修改这里；如需按环境覆盖，可设置 ENABLE_ACL=true/false
-ENABLE_ACL = _get_bool_config("ENABLE_ACL", True)
+ENABLE_ACL = _get_bool_config("ENABLE_ACL", False)
 # 是否启用更细粒度的子分块切分
 # 可直接修改这里；如需按环境覆盖，可设置 ENABLE_SUB_CHUNKING=true/false
 ENABLE_SUB_CHUNKING = _get_bool_config("ENABLE_SUB_CHUNKING", False)
-# 用户组与知识库访问关系映射配置文件
-KNOWLEDGE_BASE_GROUP_MAPPING_FILE = Path(__file__).resolve().parent / "knowledge_base_group_mapping.json"
 
 # ==================== 前端页面配置 ====================
 
@@ -224,7 +243,6 @@ def get_runtime_config() -> dict[str, object]:
 			"docs_dir": str(DOCS_DIR),
 			"default_knowledge_base": DEFAULT_KNOWLEDGE_BASE,
 			"username_group_mapping_file": str(USERNAME_GROUP_MAPPING_FILE),
-			"knowledge_base_group_mapping_file": str(KNOWLEDGE_BASE_GROUP_MAPPING_FILE),
 			"dashboard_dir": str(DASHBOARD_DIR),
 			"dashboard_index": str(DASHBOARD_INDEX),
 		},
@@ -232,14 +250,16 @@ def get_runtime_config() -> dict[str, object]:
 			"enable_https": ENABLE_HTTPS,
 		},
 		"indexing": {
+			"db_dir": str(DB_DIR),
+			"embedding_model_path": str(LOCAL_MODEL_PATH),
+			"embedding_model_name": EMBEDDING_MODEL_NAME,
+			"embedding_device": EMBEDDING_DEVICE,
 			"reranker_model_path": str(LOCAL_RERANKER_PATH),
 			"es_enabled": ES_ENABLED,
 			"es_enabled_configured": ES_ENABLED_CONFIGURED,
 			"es_url": ES_URL,
 			"es_index_name": ES_INDEX_NAME,
 			"es_parent_index_name": ES_PARENT_INDEX_NAME,
-			"remote_db_target": REMOTE_DB_TARGET,
-			"remote_db_cert": str(REMOTE_DB_CERT),
 		},
 		"retrieval": {
 			"retrieval_k": RETRIEVAL_K,
@@ -257,11 +277,11 @@ def get_runtime_config() -> dict[str, object]:
 			"rerank_candidate_k": RERANK_CANDIDATE_K,
 			"reranker_model_name": RERANKER_MODEL_NAME,
 			"reranker_device": RERANKER_DEVICE,
+			"print_logging_enabled": PRINT_LOGGING_ENABLED,
 		},
 		"access_control": {
 			"enable_acl": ENABLE_ACL,
 			"username_group_mapping_exists": USERNAME_GROUP_MAPPING_FILE.is_file(),
-			"knowledge_base_group_mapping_exists": KNOWLEDGE_BASE_GROUP_MAPPING_FILE.is_file(),
 		},
 		"chunking": {
 			"enable_sub_chunking": ENABLE_SUB_CHUNKING,
@@ -275,8 +295,9 @@ def get_runtime_config() -> dict[str, object]:
 			"es_url": _get_config_source("ES_URL"),
 			"es_index_name": _get_config_source("ES_INDEX_NAME"),
 			"es_parent_index_name": _get_config_source("ES_PARENT_INDEX_NAME"),
-			"remote_db_target": _get_config_source("REMOTE_DB_TARGET"),
-			"remote_db_cert": _get_config_source("REMOTE_DB_CERT"),
+			"db_dir": _get_config_source("DB_DIR"),
+			"embedding_model_name": _get_config_source("EMBEDDING_MODEL_NAME"),
+			"embedding_device": _get_config_source("EMBEDDING_DEVICE"),
 			"enable_acl": _get_config_source("ENABLE_ACL"),
 			"enable_sub_chunking": _get_config_source("ENABLE_SUB_CHUNKING"),
 			"final_context_k": _get_config_source("FINAL_CONTEXT_K"),
@@ -293,6 +314,7 @@ def get_runtime_config() -> dict[str, object]:
 			"rerank_candidate_k": _get_config_source("RERANK_CANDIDATE_K"),
 			"reranker_model_name": _get_config_source("RERANKER_MODEL_NAME"),
 			"reranker_device": _get_config_source("RERANKER_DEVICE"),
+			"print_logging_enabled": _get_config_source("PRINT_LOGGING_ENABLED"),
 			"enable_https": _get_config_source("ENABLE_HTTPS"),
 		},
 		"health": health,

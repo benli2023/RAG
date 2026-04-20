@@ -1,0 +1,17 @@
+{
+  "certs_dir": "certs",
+  "server": {
+    "crt": "server.crt",
+    "key": "server.key"
+  },
+  "rpc": {
+    "crt": "server.crt",
+    "key": "server.key"
+  },
+  "elasticsearch": {
+    "crt": "server.crt",
+    "key": "server.key"
+  },
+  "ES_URL": "https://localhost:9200",
+  "REMOTE_DB_TARGET": "localhost:50051"
+}

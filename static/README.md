@@ -18,4 +18,4 @@ python3 backend/server.py
 
 Then open:
 
-- http://127.0.0.1:8000/dashboard
+- https://127.0.0.1:8000/dashboard
