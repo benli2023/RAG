@@ -22,8 +22,11 @@ def _load_backend_attr(module_name: str, attr_name: str):
 
 get_es_client = _load_backend_attr("es_service", "get_es_client")
 ES_INDEX_NAME = _load_backend_attr("rag_config", "ES_INDEX_NAME")
-vectorstore = _load_backend_attr("rag_store", "vectorstore")
-run_retrieval_pipeline = _load_backend_attr("retrieval_pipeline_service", "run_retrieval_pipeline")
+DEFAULT_KNOWLEDGE_BASE = _load_backend_attr("rag_config", "DEFAULT_KNOWLEDGE_BASE")
+get_vectorstore = _load_backend_attr("rag_store", "get_vectorstore")
+get_remote_retrieval_service = _load_backend_attr("remote_retrieval_service", "get_remote_retrieval_service")
+run_retrieval_pipeline = get_remote_retrieval_service().run_retrieval_pipeline
+vectorstore = get_vectorstore(DEFAULT_KNOWLEDGE_BASE)
 
 
 @dataclass

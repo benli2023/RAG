@@ -36,7 +36,7 @@ ES_ENABLED = _load_backend_attr("rag_config", "ES_ENABLED")
 ES_INDEX_NAME = get_child_es_index_name(DEFAULT_KNOWLEDGE_BASE)
 ES_PARENT_INDEX_NAME = get_parent_es_index_name(DEFAULT_KNOWLEDGE_BASE)
 list_docs_markdown_files = _load_backend_attr("documents_service", "list_docs_markdown_files")
-run_retrieval_pipeline = _load_backend_attr("retrieval_pipeline_service", "run_retrieval_pipeline")
+get_remote_retrieval_service = _load_backend_attr("remote_retrieval_service", "get_remote_retrieval_service")
 get_vectorstore = _load_backend_attr("rag_store", "get_vectorstore")
 clear_vectorstore = _load_backend_attr("vectorstore_service", "clear_vectorstore")
 get_chunk_statistics = _load_backend_attr("vectorstore_service", "get_chunk_statistics")
@@ -44,6 +44,7 @@ clear_es_index = _load_backend_attr("es_service", "clear_es_index")
 get_es_client = _load_backend_attr("es_service", "get_es_client")
 ingest_docs = _load_backend_attr("server", "ingest_docs")
 vectorstore = get_vectorstore(DEFAULT_KNOWLEDGE_BASE)
+run_retrieval_pipeline = get_remote_retrieval_service().run_retrieval_pipeline
 
 
 @dataclass

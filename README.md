@@ -174,7 +174,7 @@ RERANKER_ENABLED = _get_bool_config("RERANKER_ENABLED", True)
 RERANKER_ENABLED=false python backend/server.py
 ```
 
-嵌入模型也可以通过环境变量覆盖。默认会优先加载本地的 `my_local_bge_m3`，如果 Windows 的内存/分页文件不足导致加载失败，会自动回退到更轻量的 `intfloat/multilingual-e5-small`：
+backend 现在固定通过 RPC 调用远端检索服务，不再在本地进程里加载 embedding 模型。下面这些 embedding 环境变量应当配置在 `RAG-RPC` 服务端，而不是 `backend/server.py`：
 
 ```bash
 EMBEDDING_MODEL_NAME=./my_local_bge_m3
@@ -182,7 +182,7 @@ EMBEDDING_FALLBACK_MODEL_NAME=intfloat/multilingual-e5-small
 EMBEDDING_DEVICE=cpu
 ```
 
-如果你本机的分页文件太小，优先增大虚拟内存仍然是最稳妥的做法；这个回退只是为了让服务尽量能启动并继续工作。
+如果你在 RPC 节点上遇到模型加载内存问题，优先增大虚拟内存仍然是最稳妥的做法；这些变量不会再影响 backend 进程本身。
 
 ACL 和子分块的临时覆盖方式相同：
 
@@ -198,43 +198,43 @@ GET /config
 
 这个接口会返回当前布尔开关、检索参数、模型配置、路径配置，以及每项配置当前来自配置文件还是环境变量，便于前端展示和排查问题。
 
-## 独立部署 gRPC 向量微服务
+## 独立部署 gRPC 检索微服务
 
-本项目支持将向量数据库的存取作为 gRPC 微服务独立部署。独立部署后，主 RAG 服务通过安全的 TLS 加密套接字远程连接子服务发起检索、入库等操作。
+本项目支持将检索链路下沉到 gRPC 微服务独立部署。独立部署后，主 RAG 服务通过安全的 TLS 加密套接字远程连接子服务发起向量检索、BM25 融合检索、reranker 精排以及向量入库等操作。
 
 ### 1. 所需依赖包
 
-在独立部署 gRPC server 的服务器上，仅需要少量核心依赖（不需要全套依赖）：
+在独立部署 gRPC server 的服务器上，需要安装检索链路相关依赖：
 
 ```bash
-pip install grpcio grpcio-tools langchain-chroma langchain-huggingface pydantic sentence-transformers
+pip install grpcio grpcio-tools fastapi python-frontmatter langchain-core langchain-text-splitters langchain-chroma langchain-community langchain-huggingface pydantic sentence-transformers elasticsearch
 ```
 
 ### 2. 证书生成
 
-微服务强制使用 SSL 加密传输。如果你没有公共证书，可以在服务端项目后端的 `backend` 目录下生成一张自签发证书：
+微服务强制使用 SSL 加密传输。如果你没有公共证书，可以在 `RAG-RPC` 目录下生成一张自签发证书：
 
 ```bash
+cd RAG-RPC
 mkdir -p certs
 openssl req -x509 -newkey rsa:4096 -keyout certs/server.key -out certs/server.crt -days 365 -nodes -subj '/CN=localhost'
 ```
 
 ### 3. 服务端启动
 
-确保 gRPC 服务器位于 `backend` 目录下，并正确包含 `grpc_server` 库以及证书配置。启动命令如下：
+独立部署时请直接从 `RAG-RPC` 目录启动服务：
 
 ```bash
-cd backend
-python -m grpc_server.server
+cd RAG-RPC
+python server.py
 ```
-服务器默认启动于 `50051` 端口，等待接收安全的 gRPC 请求。
+服务器默认启动于 `50051` 端口，等待接收安全的 gRPC 请求。默认会把 Chroma 数据目录解析到 `RAG-RPC/chroma_db`；如果你需要改目录，可以显式设置 `DB_DIR`。`RAG-RPC/server.py` 不再回退依赖项目根目录下的数据库或检索实现。
 
 ### 4. 主 RAG 服务连接配置
 
-在主要的 RAG 部署环境里，通过设定环境变量即刻切换到远程 gRPC 连接。你需要确保 `certs/server.crt` 在 RAG 客户端所在节点可以被访问到。
+在主要的 RAG 部署环境里，backend 现在默认且仅支持通过远程 gRPC 连接工作。你需要确保 `certs/server.crt` 在 RAG 客户端所在节点可以被访问到；`/retrieve`、入库和向量读写都会走 RPC 端，不再保留本地回退方案。
 
 ```bash
-USE_REMOTE_DB=true
 REMOTE_DB_TARGET=localhost:50051
 REMOTE_DB_CERT=certs/server.crt
 python backend/server.py

@@ -64,6 +64,11 @@ class VectorDatabaseServiceStub(object):
                 request_serializer=proto_dot_vector__database__pb2.GetRecordsRequest.SerializeToString,
                 response_deserializer=proto_dot_vector__database__pb2.GetRecordsResponse.FromString,
                 _registered_method=True)
+        self.Retrieve = channel.unary_unary(
+                '/vectordb.VectorDatabaseService/Retrieve',
+                request_serializer=proto_dot_vector__database__pb2.RetrieveRequest.SerializeToString,
+                response_deserializer=proto_dot_vector__database__pb2.RetrieveResponse.FromString,
+                _registered_method=True)
 
 
 class VectorDatabaseServiceServicer(object):
@@ -105,6 +110,12 @@ class VectorDatabaseServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def Retrieve(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_VectorDatabaseServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -137,6 +148,11 @@ def add_VectorDatabaseServiceServicer_to_server(servicer, server):
                     servicer.GetRecords,
                     request_deserializer=proto_dot_vector__database__pb2.GetRecordsRequest.FromString,
                     response_serializer=proto_dot_vector__database__pb2.GetRecordsResponse.SerializeToString,
+            ),
+            'Retrieve': grpc.unary_unary_rpc_method_handler(
+                    servicer.Retrieve,
+                    request_deserializer=proto_dot_vector__database__pb2.RetrieveRequest.FromString,
+                    response_serializer=proto_dot_vector__database__pb2.RetrieveResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -301,6 +317,33 @@ class VectorDatabaseService(object):
             '/vectordb.VectorDatabaseService/GetRecords',
             proto_dot_vector__database__pb2.GetRecordsRequest.SerializeToString,
             proto_dot_vector__database__pb2.GetRecordsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def Retrieve(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/vectordb.VectorDatabaseService/Retrieve',
+            proto_dot_vector__database__pb2.RetrieveRequest.SerializeToString,
+            proto_dot_vector__database__pb2.RetrieveResponse.FromString,
             options,
             channel_credentials,
             insecure,

@@ -71,6 +71,22 @@ message GetRecordsResponse {
     repeated string metadatas_json = 3;
 }
 
+message RetrieveRequest {
+    string query = 1;
+    string username = 2;
+    repeated string domains = 3;
+    repeated string source_files = 4;
+    string query_type = 5;
+    int32 top_k = 6;
+    string knowledge_base = 7;
+    bool debug = 8;
+}
+
+message RetrieveResponse {
+    string status = 1;
+    string response_json = 2;
+}
+
 service VectorDatabaseService {
     rpc SimilaritySearch(SimilaritySearchRequest) returns (SimilaritySearchResponse);
     rpc Upsert(UpsertRequest) returns (UpsertResponse);
@@ -78,4 +94,5 @@ service VectorDatabaseService {
     rpc Clear(ClearRequest) returns (ClearResponse);
     rpc Count(CountRequest) returns (CountResponse);
     rpc GetRecords(GetRecordsRequest) returns (GetRecordsResponse);
+    rpc Retrieve(RetrieveRequest) returns (RetrieveResponse);
 }

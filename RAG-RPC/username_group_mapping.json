@@ -1,0 +1,5 @@
+{
+  "zhangsan": ["iam-admin", "order-admin"],
+  "lisi": ["order-admin"],
+  "wangwu": ["user-support"]
+}

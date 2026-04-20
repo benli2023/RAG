@@ -23,7 +23,7 @@ from es_service import clear_es_index, delete_by_source_file_in_es, get_es_runti
 from knowledge_base_service import get_child_es_index_name, get_knowledge_base_dir, get_module_directory_file, get_parent_es_index_name, list_knowledge_bases, normalize_knowledge_base_name
 from rag_config import DASHBOARD_DIR, DASHBOARD_INDEX, DEFAULT_KNOWLEDGE_BASE, ENABLE_ACL, ENABLE_HTTPS, ENABLE_PARENT_CHILD_RETRIEVAL, ENABLE_SUB_CHUNKING, get_runtime_config
 from rag_store import get_parent_vectorstore, get_vectorstore
-from retrieval_pipeline_service import run_retrieval_pipeline
+from remote_retrieval_service import get_remote_retrieval_service
 from retrieval_strategy_config import get_routing_runtime_config, normalize_query_type
 from vectorstore_service import clear_vectorstore, delete_by_source_file, get_chunk_statistics, get_grouped_source_files_from_vectorstore, upsert_chunks
 
@@ -376,7 +376,7 @@ def update_document_chunks(req: SourceFileRequest):
 def retrieve_context(req: QueryRequest):
     try:
         normalize_query_type(req.query_type)
-        pipeline_result = run_retrieval_pipeline(
+        pipeline_result = get_remote_retrieval_service().run_retrieval_pipeline(
             query=req.query,
             username=req.username,
             domains=req.domains,
@@ -388,6 +388,8 @@ def retrieve_context(req: QueryRequest):
         )
     except (ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     return pipeline_result["response"]
 
