@@ -209,7 +209,7 @@ def resolve_accessible_sources(
 ) -> tuple[list[str], list[str], list[str]]:
     manifest = load_document_access_manifest(docs_dir)
     group_mapping = load_username_group_mapping(username_group_mapping_file)
-    user_subjects = resolve_user_subjects(username, group_mapping)
+    user_subjects = resolve_user_subjects(normalize_username(username), group_mapping)
     normalized_requested = dedupe_values(requested_domains)
     requested_set = set(normalized_requested)
     candidate_entries = [
@@ -230,6 +230,52 @@ def resolve_accessible_sources(
     restricted_source_files = [entry["source_file"] for entry in restricted_entries]
     accessible_domains = sorted({entry["domain"] for entry in accessible_entries})
     return accessible_source_files, restricted_source_files, accessible_domains
+
+
+def resolve_accessible_query_scope(
+    username: str,
+    requested_domains: list[str] | None,
+    requested_source_files: list[str] | None,
+    docs_dir: Path,
+    username_group_mapping_file: Path,
+) -> tuple[list[str], list[str]]:
+    normalized_requested_domains = dedupe_values(requested_domains or [])
+    normalized_requested_source_files = dedupe_values(requested_source_files or [])
+
+    if not normalized_requested_domains and not normalized_requested_source_files:
+        accessible_source_files, _, accessible_domains = resolve_accessible_sources(
+            username,
+            [],
+            docs_dir,
+            username_group_mapping_file,
+        )
+        return accessible_domains, accessible_source_files
+
+    accessible_domains: list[str] = []
+    accessible_source_files: list[str] = []
+
+    if normalized_requested_domains:
+        domain_source_files, _, domain_accessible_domains = resolve_accessible_sources(
+            username,
+            normalized_requested_domains,
+            docs_dir,
+            username_group_mapping_file,
+        )
+        accessible_source_files.extend(domain_source_files)
+        accessible_domains = domain_accessible_domains
+
+    if normalized_requested_source_files:
+        source_file_source_files, _, source_file_accessible_domains = resolve_accessible_source_files(
+            username,
+            normalized_requested_source_files,
+            docs_dir,
+            username_group_mapping_file,
+        )
+        accessible_source_files.extend(source_file_source_files)
+        if not normalized_requested_domains:
+            accessible_domains = source_file_accessible_domains
+
+    return dedupe_values(accessible_domains), dedupe_values(accessible_source_files)
 
 
 def resolve_accessible_source_files(

@@ -1,9 +1,6 @@
-import glob
 import json
 from pathlib import Path
 from typing import Any
-
-import frontmatter
 
 from rag_config import ENABLE_ACL
 
@@ -127,18 +124,32 @@ def parse_acl_subjects(metadata: dict[str, Any]) -> set[str]:
     return set()
 
 
-def load_document_access_manifest(docs_dir: Path) -> list[dict[str, Any]]:
+def load_document_access_manifest(vectorstore: Any) -> list[dict[str, Any]]:
+    try:
+        records = vectorstore.get_records(include=["metadatas"])
+        metadatas = records.get("metadatas", [])
+    except Exception as exc:
+        print(f"[ACL] failed to load metadatas from vectorstore: {exc}")
+        return []
+
     manifest: list[dict[str, Any]] = []
-    md_files = sorted(glob.glob(f"{docs_dir}/**/*.md", recursive=True))
+    seen = set()
 
-    for file_path in md_files:
-        path_obj = Path(file_path)
-        with open(path_obj, "r", encoding="utf-8") as file_handle:
-            post = frontmatter.load(file_handle)
+    for metadata in metadatas:
+        if not isinstance(metadata, dict):
+            continue
 
-        metadata = post.metadata if isinstance(post.metadata, dict) else {}
-        domain = str(metadata.get("domain") or path_obj.parent.name or "global").strip()
-        source_file = str(path_obj.resolve().relative_to(docs_dir.resolve())).replace("\\", "/")
+        domain = str(metadata.get("domain", "")).strip() or "global"
+        source_file = str(metadata.get("source_file", "")).strip()
+        
+        if not source_file:
+            continue
+
+        key = f"{domain}:{source_file}"
+        if key in seen:
+            continue
+        seen.add(key)
+
         acl_subjects = parse_acl_subjects(metadata)
 
         manifest.append({
@@ -204,10 +215,10 @@ def build_source_file_filter(source_files: list[str]) -> dict | None:
 def resolve_accessible_sources(
     username: str,
     requested_domains: list[str],
-    docs_dir: Path,
+    vectorstore: Any,
     username_group_mapping_file: Path,
 ) -> tuple[list[str], list[str], list[str]]:
-    manifest = load_document_access_manifest(docs_dir)
+    manifest = load_document_access_manifest(vectorstore)
     group_mapping = load_username_group_mapping(username_group_mapping_file)
     user_subjects = resolve_user_subjects(username, group_mapping)
     normalized_requested = dedupe_values(requested_domains)
@@ -235,10 +246,10 @@ def resolve_accessible_sources(
 def resolve_accessible_source_files(
     username: str,
     requested_source_files: list[str],
-    docs_dir: Path,
+    vectorstore: Any,
     username_group_mapping_file: Path,
 ) -> tuple[list[str], list[str], list[str]]:
-    manifest = load_document_access_manifest(docs_dir)
+    manifest = load_document_access_manifest(vectorstore)
     group_mapping = load_username_group_mapping(username_group_mapping_file)
     user_subjects = resolve_user_subjects(normalize_username(username), group_mapping)
     normalized_requested = dedupe_values(requested_source_files)

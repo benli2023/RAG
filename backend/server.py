@@ -17,10 +17,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from access_control import ANONYMOUS_USERNAME
+from access_control import resolve_accessible_query_scope
 from api_models import QueryRequest, SourceFileRequest
 from documents_service import assert_document_access, build_index_documents, list_docs_markdown_files, normalize_docs_relative_path
 from knowledge_base_service import get_child_es_index_name, get_knowledge_base_dir, get_module_directory_file, get_parent_es_index_name, list_knowledge_bases, normalize_knowledge_base_name
-from rag_config import DASHBOARD_DIR, DASHBOARD_INDEX, DEFAULT_KNOWLEDGE_BASE, ENABLE_ACL, ENABLE_HTTPS, ENABLE_PARENT_CHILD_RETRIEVAL, ENABLE_SUB_CHUNKING, get_runtime_config
+from rag_config import DASHBOARD_DIR, DASHBOARD_INDEX, DEFAULT_KNOWLEDGE_BASE, ENABLE_ACL, ENABLE_HTTPS, ENABLE_PARENT_CHILD_RETRIEVAL, ENABLE_SUB_CHUNKING, USERNAME_GROUP_MAPPING_FILE, get_runtime_config
 from rag_store import get_parent_vectorstore, get_vectorstore
 from remote_retrieval_service import get_remote_retrieval_service
 from retrieval_strategy_config import get_routing_runtime_config, normalize_query_type
@@ -380,11 +381,23 @@ def update_document_chunks(req: SourceFileRequest):
 def retrieve_context(req: QueryRequest):
     try:
         normalize_query_type(req.query_type)
+        runtime = _resolve_knowledge_base_runtime(req.knowledge_base)
+        if ENABLE_ACL:
+            authorized_domains, authorized_source_files = resolve_accessible_query_scope(
+                req.username,
+                req.domains,
+                req.source_files,
+                runtime["docs_dir"],
+                USERNAME_GROUP_MAPPING_FILE,
+            )
+        else:
+            authorized_domains = list(req.domains or [])
+            authorized_source_files = list(req.source_files or [])
         pipeline_result = get_remote_retrieval_service().run_retrieval_pipeline(
             query=req.query,
             username=req.username,
-            domains=req.domains,
-            source_files=req.source_files,
+            domains=authorized_domains,
+            source_files=authorized_source_files,
             query_type=req.query_type,
             top_k=req.top_k,
             knowledge_base=req.knowledge_base,
