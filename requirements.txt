@@ -1,12 +1,8 @@
 fastapi
 uvicorn
 python-frontmatter
+PyYAML
+pydantic
+grpcio
 langchain-core
 langchain-text-splitters
-langchain-chroma
-langchain-community
-langchain-huggingface
-sentence-transformers
-elasticsearch
-grpcio
-grpcio-tools
