@@ -15,6 +15,7 @@
   "db_dir": "chroma_db",
   "local_model_path": "../my_local_bge_m3",
   "local_reranker_path": "../my_local_bge_reranker",
+  "print_logging_enabled": true,
   "ES_URL": "https://localhost:9200",
   "REMOTE_DB_TARGET": "localhost:50051"
 }

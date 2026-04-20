@@ -1,6 +1,7 @@
 import sys
 import os
 import platform
+import builtins
 
 if platform.system() == "Linux":
     try:
@@ -22,11 +23,23 @@ import es_service
 import proto.vector_database_pb2 as pb2
 import proto.vector_database_pb2_grpc as pb2_grpc
 from local_vector_database import LocalVectorDatabase
-from rag_config import DB_DIR, EMBEDDING_DEVICE, EMBEDDING_MODEL_NAME
+from rag_config import DB_DIR, EMBEDDING_DEVICE, EMBEDDING_MODEL_NAME, PRINT_LOGGING_ENABLED
 from rag_store import get_embedding_function
 from retrieval_pipeline_service import run_retrieval_pipeline
 
 RAG_RPC_DIR = Path(__file__).resolve().parent
+
+
+if not PRINT_LOGGING_ENABLED:
+    def _disabled_print(*args, **kwargs):
+        return None
+
+    builtins.print = _disabled_print
+
+
+def _log_print(*args, **kwargs):
+    if PRINT_LOGGING_ENABLED:
+        print(*args, **kwargs)
 
 
 def _json_safe_value(value):
@@ -75,7 +88,7 @@ class VectorDatabaseServicer(pb2_grpc.VectorDatabaseServiceServicer):
 
     def _log_request(self, context, method_name, collection_name):
         peer = context.peer()
-        print(f"[gRPC] {method_name} | Collection: {collection_name} | Peer: {peer}")
+        _log_print(f"[gRPC] {method_name} | Collection: {collection_name} | Peer: {peer}")
 
     def SimilaritySearch(self, request, context):
         self._log_request(context, "SimilaritySearch", request.collection_name)
@@ -102,7 +115,7 @@ class VectorDatabaseServicer(pb2_grpc.VectorDatabaseServiceServicer):
         embeddings = [list(e.values) for e in request.embeddings]
 
         if not embeddings and getattr(self.multi_db, "embedding_function", None) and request.documents:
-            print(f"[gRPC] Calculating embeddings for {len(request.documents)} documents...")
+            _log_print(f"[gRPC] Calculating embeddings for {len(request.documents)} documents...")
             docs = list(request.documents)
             batch_size = 32
             start_time = time.perf_counter()
@@ -115,13 +128,13 @@ class VectorDatabaseServicer(pb2_grpc.VectorDatabaseServiceServicer):
                 embeddings.extend(batch_embeddings)
                 embedded_count += len(batch_docs)
                 batch_elapsed = time.perf_counter() - batch_start
-                print(
+                _log_print(
                     f"[gRPC] Embedded {embedded_count}/{total_documents} "
                     f"batch={i // batch_size + 1} size={len(batch_docs)} "
                     f"time={batch_elapsed:.2f}s"
                 )
             total_elapsed = time.perf_counter() - start_time
-            print(f"[gRPC] Finished embedding {total_documents} chunks in {total_elapsed:.2f}s")
+            _log_print(f"[gRPC] Finished embedding {total_documents} chunks in {total_elapsed:.2f}s")
 
         db.upsert(
             ids=list(request.ids),
@@ -169,7 +182,7 @@ class VectorDatabaseServicer(pb2_grpc.VectorDatabaseServiceServicer):
 
     def Retrieve(self, request, context):
         peer = context.peer()
-        print(
+        _log_print(
             f"[gRPC] Retrieve | KnowledgeBase: {request.knowledge_base or 'default'} "
             f"| User: {request.username or 'anonymous'} | Peer: {peer}"
         )
@@ -244,10 +257,10 @@ class VectorDatabaseServicer(pb2_grpc.VectorDatabaseServiceServicer):
 
 def serve():
     Path(DB_DIR).mkdir(parents=True, exist_ok=True)
-    print(f"Loading embeddings model: {EMBEDDING_MODEL_NAME} on {EMBEDDING_DEVICE}...")
+    _log_print(f"Loading embeddings model: {EMBEDDING_MODEL_NAME} on {EMBEDDING_DEVICE}...")
     embedding_function = get_embedding_function()
 
-    print(f"Initializing Multi-Collection Vector Database Manager at {DB_DIR}...")
+    _log_print(f"Initializing Multi-Collection Vector Database Manager at {DB_DIR}...")
     multi_db = MultiCollectionVectorDatabase(DB_DIR, embedding_function)
 
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
@@ -260,8 +273,8 @@ def serve():
     crt_path = cert_dir / "server.crt"
 
     if not key_path.exists() or not crt_path.exists():
-        print(f"Error: TLS certificate files not found in {cert_dir}")
-        print("Please ensure 'server.key' and 'server.crt' are present.")
+        _log_print(f"Error: TLS certificate files not found in {cert_dir}")
+        _log_print("Please ensure 'server.key' and 'server.crt' are present.")
         sys.exit(1)
 
     with open(key_path, "rb") as f:
@@ -275,7 +288,7 @@ def serve():
 
     server.add_secure_port(f"[::]:{PORT}", server_credentials)
     server.start()
-    print(f"gRPC Vector DB Server started SECURELY (TLS/HTTPS) on port {PORT}")
+    _log_print(f"gRPC Vector DB Server started SECURELY (TLS/HTTPS) on port {PORT}")
     server.wait_for_termination()
 
 

@@ -157,6 +157,11 @@ DB_DIR = _get_path_config("db_dir", "chroma_db", "DB_DIR")
 LOCAL_RERANKER_PATH = _get_path_config("local_reranker_path", "../my_local_bge_reranker", "LOCAL_RERANKER_PATH")
 # Elasticsearch 连接地址
 ES_URL = _rag_config_json.get("ES_URL", "https://localhost:9200")
+# 是否启用 print 输出日志
+PRINT_LOGGING_ENABLED = _parse_bool(
+	os.getenv("PRINT_LOGGING_ENABLED"),
+	_parse_bool(_rag_config_json.get("print_logging_enabled"), True),
+)
 # Elasticsearch 子切片倒排索引名称
 ES_INDEX_NAME = os.getenv("ES_INDEX_NAME", "rag_docs_bm25")
 # Elasticsearch 父文档倒排索引名称
@@ -272,6 +277,7 @@ def get_runtime_config() -> dict[str, object]:
 			"rerank_candidate_k": RERANK_CANDIDATE_K,
 			"reranker_model_name": RERANKER_MODEL_NAME,
 			"reranker_device": RERANKER_DEVICE,
+			"print_logging_enabled": PRINT_LOGGING_ENABLED,
 		},
 		"access_control": {
 			"enable_acl": ENABLE_ACL,
@@ -308,6 +314,7 @@ def get_runtime_config() -> dict[str, object]:
 			"rerank_candidate_k": _get_config_source("RERANK_CANDIDATE_K"),
 			"reranker_model_name": _get_config_source("RERANKER_MODEL_NAME"),
 			"reranker_device": _get_config_source("RERANKER_DEVICE"),
+			"print_logging_enabled": _get_config_source("PRINT_LOGGING_ENABLED"),
 			"enable_https": _get_config_source("ENABLE_HTTPS"),
 		},
 		"health": health,

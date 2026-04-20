@@ -10,11 +10,16 @@ from es_service import search_bm25_documents
 from faq_support import rank_results_for_generation
 from hybrid_retrieval_service import reciprocal_rank_fusion
 from knowledge_base_service import get_child_es_index_name, get_parent_es_index_name, normalize_knowledge_base_name
-from rag_config import BM25_RECALL_K, CONTEXT_COMPRESSION_ENABLED, CONTEXT_COMPRESSION_MIN_CHARS, CONTEXT_COMPRESSION_SENTENCE_K, ENABLE_PARENT_CHILD_RETRIEVAL, FINAL_CONTEXT_K, FUSION_TOP_K, PARENT_RECALL_K, RERANKER_ENABLED, RRF_K, VECTOR_RECALL_K
+from rag_config import BM25_RECALL_K, CONTEXT_COMPRESSION_ENABLED, CONTEXT_COMPRESSION_MIN_CHARS, CONTEXT_COMPRESSION_SENTENCE_K, ENABLE_PARENT_CHILD_RETRIEVAL, FINAL_CONTEXT_K, FUSION_TOP_K, PARENT_RECALL_K, PRINT_LOGGING_ENABLED, RERANKER_ENABLED, RRF_K, VECTOR_RECALL_K
 from rag_store import get_parent_vectorstore, get_vectorstore
 from retrieval_strategy_config import get_retrieval_strategy_plan, normalize_query_type
 from reranker_service import rerank_documents
 from retrieval_response_formatter import build_retrieval_response
+
+
+def _log_print(*args, **kwargs):
+    if PRINT_LOGGING_ENABLED:
+        print(*args, **kwargs)
 
 
 def _normalize_top_k(top_k: int | None) -> int:
@@ -394,9 +399,9 @@ def run_retrieval_pipeline(
 
     if normalized_scope_source_files or normalized_scope_domains:
         candidate_scope_count = len(normalized_scope_source_files) if normalized_scope_source_files else len(normalized_scope_domains)
-        print(f"🌐 全局检索启用，当前候选文档数={candidate_scope_count}，user={normalized_username}")
+        _log_print(f"🌐 全局检索启用，当前候选文档数={candidate_scope_count}，user={normalized_username}")
     else:
-        print(f"🌐 检索未提供范围，按全量知识库检索处理，user={normalized_username}")
+        _log_print(f"🌐 检索未提供范围，按全量知识库检索处理，user={normalized_username}")
 
     parent_results: list[Document] = []
     parent_vector_results: list[Document] = []
@@ -414,7 +419,7 @@ def run_retrieval_pipeline(
         parent_scope_source_files = normalized_scope_source_files
         parent_filter_value = build_source_file_filter(parent_scope_source_files) if parent_scope_source_files else None
         parent_collection_count = _collection_count(parent_vectorstore)
-        print(
+        _log_print(
             f"INFO: 阶段一父文档双路召回，parent_k={PARENT_RECALL_K}, "
             f"authorized_docs={len(normalized_scope_source_files)}, authorized_domains={normalized_scope_domains}, filter={parent_filter_value}"
         )
@@ -424,7 +429,7 @@ def run_retrieval_pipeline(
             else:
                 parent_vector_results = parent_vectorstore.similarity_search(normalized_query, k=PARENT_RECALL_K)
         else:
-            print("INFO: 父向量索引为空，阶段一跳过向量召回")
+            _log_print("INFO: 父向量索引为空，阶段一跳过向量召回")
 
         parent_bm25_results = search_bm25_documents(
             query=normalized_query,
@@ -439,7 +444,7 @@ def run_retrieval_pipeline(
         parent_vector_results = _dedupe_documents_by_source_file(parent_vector_results)
         parent_bm25_results = _dedupe_documents_by_source_file(parent_bm25_results)
         if len(parent_vector_results) != raw_parent_vector_hit_count or len(parent_bm25_results) != raw_parent_bm25_hit_count:
-            print(
+            _log_print(
                 f"INFO: 阶段一按 source_file 去重，"
                 f"parent_vector_hits={raw_parent_vector_hit_count}->{len(parent_vector_results)}, "
                 f"parent_bm25_hits={raw_parent_bm25_hit_count}->{len(parent_bm25_results)}"
@@ -463,16 +468,16 @@ def run_retrieval_pipeline(
                 narrowed_source_files = merged_requested_source_files or parent_target_source_files or normalized_scope_source_files
                 two_stage_applied = True
                 two_stage_fallback_reason = "applied"
-                print(
+                _log_print(
                     f"INFO: 阶段一完成，parent_vector_hits={len(parent_vector_results)}, parent_bm25_hits={len(parent_bm25_results)}, parent_hits={len(parent_results)}, "
                     f"routed_domains={routed_domains}, expanded_routed_domains={expanded_routed_domains}, narrowed_domains={narrowed_domains}, target_files={narrowed_source_files}"
                 )
             else:
                 two_stage_fallback_reason = "no-parent-hits"
-                print("INFO: 阶段一未命中父文档，回退到授权范围内直接检索")
+                _log_print("INFO: 阶段一未命中父文档，回退到授权范围内直接检索")
         else:
             two_stage_fallback_reason = "no-parent-hits"
-            print("INFO: 阶段一双路召回未命中父文档，回退到当前单层检索")
+            _log_print("INFO: 阶段一双路召回未命中父文档，回退到当前单层检索")
 
     child_filter_value = build_source_file_filter(narrowed_source_files) if narrowed_source_files else filter_value
 
@@ -485,7 +490,7 @@ def run_retrieval_pipeline(
         )
         sql_filter_value = build_source_file_filter(sql_source_files) if sql_source_files else child_filter_value
         sql_target_source_files = sql_source_files or narrowed_source_files
-        print(
+        _log_print(
             f"INFO: 执行结构化查询，parent_enabled={ENABLE_PARENT_CHILD_RETRIEVAL}, parent_k={PARENT_RECALL_K}, "
             f"two_stage_applied={two_stage_applied}, query_type={normalized_query_type}, strategy={retrieval_plan['strategy']}, "
             f"requested_execution_mode={requested_execution_mode}, execution_mode={resolved_execution_mode}, "
@@ -505,10 +510,10 @@ def run_retrieval_pipeline(
             es_index_name=es_index_name,
         )
 
-        print(f"INFO: 结构化查询召回完成，vector_hits={len(vector_results)}, bm25_hits={len(bm25_results)}")
-        print(f"INFO: 结构化查询 RRF 融合完成，fused_hits={len(fused_results)}")
+        _log_print(f"INFO: 结构化查询召回完成，vector_hits={len(vector_results)}, bm25_hits={len(bm25_results)}")
+        _log_print(f"INFO: 结构化查询 RRF 融合完成，fused_hits={len(fused_results)}")
     else:
-        print(
+        _log_print(
             f"INFO: 执行混合召回，parent_enabled={ENABLE_PARENT_CHILD_RETRIEVAL}, parent_k={PARENT_RECALL_K}, "
             f"two_stage_applied={two_stage_applied}, query_type={normalized_query_type}, strategy={retrieval_plan['strategy']}, "
             f"requested_execution_mode={requested_execution_mode}, execution_mode={resolved_execution_mode}, "
@@ -528,8 +533,8 @@ def run_retrieval_pipeline(
             es_index_name=es_index_name,
         )
 
-        print(f"INFO: 混合召回完成，vector_hits={len(vector_results)}, bm25_hits={len(bm25_results)}")
-        print(f"INFO: RRF 融合完成，fused_hits={len(fused_results)}")
+        _log_print(f"INFO: 混合召回完成，vector_hits={len(vector_results)}, bm25_hits={len(bm25_results)}")
+        _log_print(f"INFO: RRF 融合完成，fused_hits={len(fused_results)}")
 
     reranked_results = rank_results_for_generation(normalized_query, rerank_documents(normalized_query, fused_results))
     selected_results = reranked_results[:effective_final_context_k]
@@ -542,7 +547,7 @@ def run_retrieval_pipeline(
             sentence_limit=CONTEXT_COMPRESSION_SENTENCE_K,
         )
         compression_metrics = _compute_compression_metrics(selected_results, final_results)
-        print(
+        _log_print(
             "INFO: 上下文压缩完成，"
             f"doc_hits={len(final_results)}, compressed_docs={compression_metrics['compressed_doc_count']}, "
             f"saved_chars={compression_metrics['saved_char_count']}, saved_ratio={compression_metrics['saved_ratio']:.2%}, "
