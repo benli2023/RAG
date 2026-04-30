@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -120,8 +121,21 @@ def _build_default_query_types() -> dict[str, dict[str, Any]]:
     }
 
 
-def _load_raw_config() -> dict[str, Any]:
-    config_path = _config_path()
+def _config_cache_token(config_path: Path) -> tuple[str, int, int]:
+    resolved_path = config_path.expanduser().resolve()
+    try:
+        stat = resolved_path.stat()
+    except OSError:
+        return str(resolved_path), 0, 0
+    return str(resolved_path), int(stat.st_mtime_ns), int(stat.st_size)
+
+
+@lru_cache(maxsize=8)
+def _load_raw_config_cached(path_text: str, mtime_ns: int, size: int) -> dict[str, Any]:
+    if mtime_ns == 0 or size == 0:
+        return {}
+
+    config_path = Path(path_text)
     if not config_path.is_file():
         return {}
 
@@ -136,6 +150,11 @@ def _load_raw_config() -> dict[str, Any]:
         print(f"[routing-config] ignore {config_path}: root value must be a JSON object")
         return {}
     return payload
+
+
+def _load_raw_config() -> dict[str, Any]:
+    path_text, mtime_ns, size = _config_cache_token(_config_path())
+    return dict(_load_raw_config_cached(path_text, mtime_ns, size))
 
 
 def _semantic_fallback_definition(query_type: str, default_query_types: dict[str, dict[str, Any]]) -> dict[str, Any]:

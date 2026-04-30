@@ -162,6 +162,13 @@ PRINT_LOGGING_ENABLED = _parse_bool(
 	os.getenv("PRINT_LOGGING_ENABLED"),
 	_parse_bool(_rag_config_json.get("print_logging_enabled"), True),
 )
+# gRPC keepalive defaults stay conservative so long batch upserts do not trigger
+# ENHANCE_YOUR_CALM / too_many_pings on clients or servers.
+RPC_KEEPALIVE_TIME_MS = max(1_000, _get_int_config("RPC_KEEPALIVE_TIME_MS", 300_000))
+RPC_KEEPALIVE_TIMEOUT_MS = max(1_000, _get_int_config("RPC_KEEPALIVE_TIMEOUT_MS", 10_000))
+RPC_KEEPALIVE_PERMIT_WITHOUT_CALLS = _get_bool_config("RPC_KEEPALIVE_PERMIT_WITHOUT_CALLS", False)
+RPC_HTTP2_MAX_PINGS_WITHOUT_DATA = max(0, _get_int_config("RPC_HTTP2_MAX_PINGS_WITHOUT_DATA", 0))
+RPC_HTTP2_MIN_RECV_PING_INTERVAL_WITHOUT_DATA_MS = max(1_000, _get_int_config("RPC_HTTP2_MIN_RECV_PING_INTERVAL_WITHOUT_DATA_MS", 300_000))
 # Elasticsearch 子切片倒排索引名称
 ES_INDEX_NAME = os.getenv("ES_INDEX_NAME", "rag_docs_bm25")
 # Elasticsearch 父文档倒排索引名称
@@ -194,6 +201,8 @@ CONTEXT_COMPRESSION_SENTENCE_K = max(1, _get_int_config("CONTEXT_COMPRESSION_SEN
 # 是否启用 Elasticsearch BM25 召回
 ES_ENABLED = _get_bool_config("ES_ENABLED", True)
 ES_ENABLED_CONFIGURED = os.getenv("ES_ENABLED") is not None
+# 是否允许 IK 分词器缺失时降级到 standard analyzer；默认阻断以避免中文 BM25 质量静默下降
+ES_ALLOW_ANALYZER_FALLBACK = _get_bool_config("ES_ALLOW_ANALYZER_FALLBACK", False)
 # 是否启用 BGE Reranker 精排
 # 可直接修改这里；如需按环境覆盖，可设置 RERANKER_ENABLED=true/false
 RERANKER_ENABLED = _get_bool_config("RERANKER_ENABLED", True)
@@ -211,6 +220,8 @@ RERANKER_MODEL_NAME = os.getenv(
 )
 # Reranker 推理设备
 RERANKER_DEVICE = os.getenv("RERANKER_DEVICE", "cpu")
+# Reranker 单次 CrossEncoder 预测批大小；CPU 下过大容易拉高尾延迟
+RERANKER_BATCH_SIZE = max(1, _get_int_config("RERANKER_BATCH_SIZE", 8))
 
 # ==================== 权限与分块配置 ====================
 
@@ -260,6 +271,7 @@ def get_runtime_config() -> dict[str, object]:
 			"es_url": ES_URL,
 			"es_index_name": ES_INDEX_NAME,
 			"es_parent_index_name": ES_PARENT_INDEX_NAME,
+			"es_allow_analyzer_fallback": ES_ALLOW_ANALYZER_FALLBACK,
 		},
 		"retrieval": {
 			"retrieval_k": RETRIEVAL_K,
@@ -277,6 +289,7 @@ def get_runtime_config() -> dict[str, object]:
 			"rerank_candidate_k": RERANK_CANDIDATE_K,
 			"reranker_model_name": RERANKER_MODEL_NAME,
 			"reranker_device": RERANKER_DEVICE,
+			"reranker_batch_size": RERANKER_BATCH_SIZE,
 			"print_logging_enabled": PRINT_LOGGING_ENABLED,
 		},
 		"access_control": {
@@ -295,6 +308,7 @@ def get_runtime_config() -> dict[str, object]:
 			"es_url": _get_config_source("ES_URL"),
 			"es_index_name": _get_config_source("ES_INDEX_NAME"),
 			"es_parent_index_name": _get_config_source("ES_PARENT_INDEX_NAME"),
+			"es_allow_analyzer_fallback": _get_config_source("ES_ALLOW_ANALYZER_FALLBACK"),
 			"db_dir": _get_config_source("DB_DIR"),
 			"embedding_model_name": _get_config_source("EMBEDDING_MODEL_NAME"),
 			"embedding_device": _get_config_source("EMBEDDING_DEVICE"),
@@ -314,6 +328,7 @@ def get_runtime_config() -> dict[str, object]:
 			"rerank_candidate_k": _get_config_source("RERANK_CANDIDATE_K"),
 			"reranker_model_name": _get_config_source("RERANKER_MODEL_NAME"),
 			"reranker_device": _get_config_source("RERANKER_DEVICE"),
+			"reranker_batch_size": _get_config_source("RERANKER_BATCH_SIZE"),
 			"print_logging_enabled": _get_config_source("PRINT_LOGGING_ENABLED"),
 			"enable_https": _get_config_source("ENABLE_HTTPS"),
 		},

@@ -137,6 +137,16 @@ USERNAME_GROUP_MAPPING_FILE = Path(__file__).resolve().parent / "username_group_
 REMOTE_DB_TARGET = _rag_config_json.get("REMOTE_DB_TARGET", "localhost:50051")
 # 远程向量数据库证书路径
 REMOTE_DB_CERT = os.getenv("REMOTE_DB_CERT", str(RPC_CRT))
+# 远程 RPC 调用超时与重试配置
+REMOTE_RPC_RETRY_ATTEMPTS = max(1, _get_int_config("REMOTE_RPC_RETRY_ATTEMPTS", 2))
+REMOTE_RPC_RETRIEVE_TIMEOUT_SECONDS = max(1, _get_int_config("REMOTE_RPC_RETRIEVE_TIMEOUT_SECONDS", 60))
+REMOTE_RPC_UPSERT_TIMEOUT_SECONDS = max(1, _get_int_config("REMOTE_RPC_UPSERT_TIMEOUT_SECONDS", 600))
+REMOTE_RPC_ADMIN_TIMEOUT_SECONDS = max(1, _get_int_config("REMOTE_RPC_ADMIN_TIMEOUT_SECONDS", 60))
+REMOTE_RPC_MAX_BATCH_BYTES = max(256 * 1024, _get_int_config("REMOTE_RPC_MAX_BATCH_BYTES", 3 * 1024 * 1024))
+REMOTE_RPC_KEEPALIVE_TIME_MS = max(1_000, _get_int_config("REMOTE_RPC_KEEPALIVE_TIME_MS", 300_000))
+REMOTE_RPC_KEEPALIVE_TIMEOUT_MS = max(1_000, _get_int_config("REMOTE_RPC_KEEPALIVE_TIMEOUT_MS", 10_000))
+REMOTE_RPC_KEEPALIVE_PERMIT_WITHOUT_CALLS = _get_bool_config("REMOTE_RPC_KEEPALIVE_PERMIT_WITHOUT_CALLS", False)
+REMOTE_RPC_GET_RECORDS_PAGE_SIZE = max(1, _get_int_config("REMOTE_RPC_GET_RECORDS_PAGE_SIZE", 1000))
 # 本地 Reranker 模型目录
 LOCAL_RERANKER_PATH = PROJECT_ROOT / "my_local_bge_reranker"
 # Elasticsearch 连接地址
@@ -173,6 +183,8 @@ CONTEXT_COMPRESSION_SENTENCE_K = max(1, _get_int_config("CONTEXT_COMPRESSION_SEN
 # 是否启用 Elasticsearch BM25 召回
 ES_ENABLED = _get_bool_config("ES_ENABLED", True)
 ES_ENABLED_CONFIGURED = os.getenv("ES_ENABLED") is not None
+# 是否允许 IK 分词器缺失时降级到 standard analyzer；默认阻断以避免中文 BM25 质量静默下降
+ES_ALLOW_ANALYZER_FALLBACK = _get_bool_config("ES_ALLOW_ANALYZER_FALLBACK", False)
 # 是否启用 BGE Reranker 精排
 # 可直接修改这里；如需按环境覆盖，可设置 RERANKER_ENABLED=true/false
 RERANKER_ENABLED = _get_bool_config("RERANKER_ENABLED", True)
@@ -238,8 +250,15 @@ def get_runtime_config() -> dict[str, object]:
 			"es_url": ES_URL,
 			"es_index_name": ES_INDEX_NAME,
 			"es_parent_index_name": ES_PARENT_INDEX_NAME,
+			"es_allow_analyzer_fallback": ES_ALLOW_ANALYZER_FALLBACK,
 			"remote_db_target": REMOTE_DB_TARGET,
 			"remote_db_cert": str(REMOTE_DB_CERT),
+			"remote_rpc_retry_attempts": REMOTE_RPC_RETRY_ATTEMPTS,
+			"remote_rpc_retrieve_timeout_seconds": REMOTE_RPC_RETRIEVE_TIMEOUT_SECONDS,
+			"remote_rpc_upsert_timeout_seconds": REMOTE_RPC_UPSERT_TIMEOUT_SECONDS,
+			"remote_rpc_admin_timeout_seconds": REMOTE_RPC_ADMIN_TIMEOUT_SECONDS,
+			"remote_rpc_max_batch_bytes": REMOTE_RPC_MAX_BATCH_BYTES,
+			"remote_rpc_get_records_page_size": REMOTE_RPC_GET_RECORDS_PAGE_SIZE,
 		},
 		"retrieval": {
 			"retrieval_k": RETRIEVAL_K,
@@ -275,8 +294,15 @@ def get_runtime_config() -> dict[str, object]:
 			"es_url": _get_config_source("ES_URL"),
 			"es_index_name": _get_config_source("ES_INDEX_NAME"),
 			"es_parent_index_name": _get_config_source("ES_PARENT_INDEX_NAME"),
+			"es_allow_analyzer_fallback": _get_config_source("ES_ALLOW_ANALYZER_FALLBACK"),
 			"remote_db_target": _get_config_source("REMOTE_DB_TARGET"),
 			"remote_db_cert": _get_config_source("REMOTE_DB_CERT"),
+			"remote_rpc_retry_attempts": _get_config_source("REMOTE_RPC_RETRY_ATTEMPTS"),
+			"remote_rpc_retrieve_timeout_seconds": _get_config_source("REMOTE_RPC_RETRIEVE_TIMEOUT_SECONDS"),
+			"remote_rpc_upsert_timeout_seconds": _get_config_source("REMOTE_RPC_UPSERT_TIMEOUT_SECONDS"),
+			"remote_rpc_admin_timeout_seconds": _get_config_source("REMOTE_RPC_ADMIN_TIMEOUT_SECONDS"),
+			"remote_rpc_max_batch_bytes": _get_config_source("REMOTE_RPC_MAX_BATCH_BYTES"),
+			"remote_rpc_get_records_page_size": _get_config_source("REMOTE_RPC_GET_RECORDS_PAGE_SIZE"),
 			"enable_acl": _get_config_source("ENABLE_ACL"),
 			"enable_sub_chunking": _get_config_source("ENABLE_SUB_CHUNKING"),
 			"final_context_k": _get_config_source("FINAL_CONTEXT_K"),

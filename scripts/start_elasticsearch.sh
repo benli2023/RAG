@@ -46,6 +46,40 @@ ES_STARTUP_ARGS=(
 
 mkdir -p "$LOG_DIR" "$PID_DIR"
 
+allow_analyzer_fallback() {
+  case "${ES_ALLOW_ANALYZER_FALLBACK:-false}" in
+    1|true|TRUE|yes|YES|y|Y|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+check_ik_analyzer() {
+  if curl -kfsS "$ES_URL/_analyze" \
+      -H 'Content-Type: application/json' \
+      -d '{"analyzer":"ik_max_word","text":"ik analyzer health check"}' >/dev/null 2>&1; then
+    echo "Elasticsearch IK analyzer is available at $ES_URL"
+    return 0
+  fi
+
+  cat <<EOF
+ERROR: Elasticsearch is running, but the IK analyzer is not available.
+
+This project requires elasticsearch-analysis-ik for Chinese BM25 recall.
+Install the plugin version that matches your Elasticsearch version, restart Elasticsearch,
+then recreate/rebuild the RAG indexes.
+
+Temporary fallback is lower quality and must be explicit:
+  ES_ALLOW_ANALYZER_FALLBACK=true $0
+EOF
+
+  if allow_analyzer_fallback; then
+    echo "Continuing because ES_ALLOW_ANALYZER_FALLBACK=true."
+    return 0
+  fi
+
+  return 1
+}
+
 prepare_local_config() {
   local source_conf_dir="$ES_HOME/config"
   rm -rf "$LOCAL_CONF_DIR"
@@ -81,6 +115,7 @@ EOF
 
 if curl -kfsS "$ES_URL" >/dev/null 2>&1; then
   echo "Elasticsearch is already running at $ES_URL"
+  check_ik_analyzer
   exit 0
 fi
 
@@ -145,6 +180,7 @@ echo "$es_pid" > "$PID_FILE"
 for _ in $(seq 1 "$ES_STARTUP_TIMEOUT"); do
   if curl -kfsS "$ES_URL" >/dev/null 2>&1; then
     echo "Elasticsearch is up at $ES_URL"
+    check_ik_analyzer
     exit 0
   fi
   sleep 1

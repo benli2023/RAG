@@ -784,6 +784,8 @@ def _evaluate_case(case: GeneratedCase) -> dict[str, Any]:
 				{
 					"source_file": doc.metadata.get("source_file", "unknown"),
 					"domain": doc.metadata.get("domain", "unknown"),
+					"vector_score": doc.metadata.get("vector_score"),
+					"vector_distance": doc.metadata.get("vector_distance"),
 					"preview": doc.page_content[:120].replace("\n", " "),
 				}
 				for doc in trace["vector_results"][:3]
@@ -842,6 +844,20 @@ def _summarize_report(index_health_before: dict[str, Any], index_health_after: d
 
 def _report_status(results: list[dict[str, Any]]) -> str:
 	return "success" if all(result["passed"] for result in results) else "failure"
+
+
+def _format_vector_score_metrics(metrics: dict[str, Any]) -> str:
+	scored_hit_count = int(metrics.get("scored_hit_count") or 0)
+	if scored_hit_count <= 0:
+		return "unavailable"
+
+	return (
+		f"scored={scored_hit_count}, "
+		f"score_avg={metrics.get('score_avg')}, "
+		f"score_max={metrics.get('score_max')}, "
+		f"distance_min={metrics.get('distance_min')}, "
+		f"distance_avg={metrics.get('distance_avg')}"
+	)
 
 
 def _build_status_report(base_report: dict[str, Any], report_variant: str, overall_status: str) -> dict[str, Any]:
@@ -947,6 +963,7 @@ def _render_markdown_report(report: dict[str, Any]) -> str:
 				f"- Forbidden keywords: {', '.join(result['forbidden_keywords']) if result['forbidden_keywords'] else 'none'}",
 				f"- Matched forbidden keywords: {', '.join(result['matched_forbidden_keywords']) if result['matched_forbidden_keywords'] else 'none'}",
 				f"- Stage hits: vector={result['metrics']['vector_hit_count']}, bm25={result['metrics']['bm25_hit_count']}, fused={result['metrics']['fused_hit_count']}, reranked={result['metrics']['reranked_hit_count']}, final={result['metrics']['final_hit_count']}",
+				f"- Vector scores: parent[{_format_vector_score_metrics(result['metrics'].get('parent_vector_score_metrics', {}))}], child[{_format_vector_score_metrics(result['metrics'].get('vector_score_metrics', {}))}]",
 				f"- Compression: compressed_docs={result['metrics']['compression']['compressed_doc_count']}, saved_chars={result['metrics']['compression']['saved_char_count']}, saved_ratio={result['metrics']['compression']['saved_ratio']:.2%}",
 				"",
 			]

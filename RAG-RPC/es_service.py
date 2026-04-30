@@ -6,7 +6,7 @@ from typing import Any
 from langchain_core.documents import Document
 
 from documents_service import build_chunk_id
-from rag_config import ES_ENABLED, ES_ENABLED_CONFIGURED, ES_INDEX_NAME, ES_PARENT_INDEX_NAME, ES_URL
+from rag_config import ES_ALLOW_ANALYZER_FALLBACK, ES_ENABLED, ES_ENABLED_CONFIGURED, ES_INDEX_NAME, ES_PARENT_INDEX_NAME, ES_URL
 
 try:
     from elasticsearch import Elasticsearch
@@ -16,6 +16,8 @@ except ImportError:
 
 _es_client = None
 _es_unavailable_reason: str | None = None
+_es_analyzer_available: bool | None = None
+_es_analyzer_unavailable_reason: str | None = None
 _es_disabled_warned = False
 _es_analyzer_fallback_warned = False
 
@@ -31,6 +33,119 @@ def _resolve_analyzer_mode_from_mapping(mapping: dict[str, Any]) -> str:
     if analyzer or search_analyzer:
         return "custom"
     return "standard"
+
+
+def _is_unknown_analyzer_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(
+        fragment in message
+        for fragment in (
+            "unknown analyzer type",
+            "failed to find analyzer",
+            "analyzer [ik_max_word] not found",
+            "analyzer [ik_smart] not found",
+            "unknown analyzer [ik_max_word]",
+            "unknown analyzer [ik_smart]",
+            "no handler for type [ik_max_word]",
+            "no handler for type [ik_smart]",
+        )
+    )
+
+
+def _build_missing_ik_analyzer_message(index_name: str, action: str, detail: str | None = None) -> str:
+    detail_text = f" Detail: {detail}" if detail else ""
+    return (
+        "IK analyzer is required for Elasticsearch BM25 recall, but ik_max_word/ik_smart is unavailable. "
+        f"index={index_name}, action={action}. "
+        "Install the elasticsearch-analysis-ik plugin that matches the Elasticsearch version, restart Elasticsearch, "
+        "then recreate/rebuild the affected indexes. "
+        "If this lower-quality fallback is intentional, set ES_ALLOW_ANALYZER_FALLBACK=true."
+        f"{detail_text}"
+    )
+
+
+def _build_index_analyzer_mismatch_message(index_name: str, mode: str) -> str:
+    return (
+        "Elasticsearch index analyzer mismatch. "
+        f"index={index_name}, analyzer_mode={mode}, required=ik. "
+        "Install the elasticsearch-analysis-ik plugin if needed, then recreate/rebuild this index so text fields use "
+        "analyzer=ik_max_word and search_analyzer=ik_smart. "
+        "If this lower-quality fallback is intentional, set ES_ALLOW_ANALYZER_FALLBACK=true."
+    )
+
+
+def _mark_analyzer_unavailable(reason: str) -> None:
+    global _es_analyzer_unavailable_reason
+
+    if _es_analyzer_unavailable_reason is None:
+        _es_analyzer_unavailable_reason = reason
+        print(f"[elasticsearch] analyzer unavailable: {reason}")
+
+
+def _warn_analyzer_fallback(reason: str | None = None) -> None:
+    global _es_analyzer_fallback_warned
+
+    if _es_analyzer_fallback_warned:
+        return
+
+    _es_analyzer_fallback_warned = True
+    suffix = f" reason={reason}" if reason else ""
+    print(
+        "[elasticsearch] WARNING: IK analyzer unavailable or index mapping is not IK; "
+        "falling back to the standard text analyzer. Chinese BM25 quality may degrade."
+        f"{suffix}"
+    )
+
+
+def _check_ik_analyzer_available(client, index_name: str, action: str) -> bool:
+    global _es_analyzer_available
+
+    if _es_analyzer_available is True:
+        return True
+
+    if _es_analyzer_available is False:
+        reason = _es_analyzer_unavailable_reason or _build_missing_ik_analyzer_message(index_name, action)
+        if ES_ALLOW_ANALYZER_FALLBACK:
+            _warn_analyzer_fallback(reason)
+            return False
+        raise RuntimeError(reason)
+
+    try:
+        client.indices.analyze(analyzer="ik_max_word", text="ik analyzer health check")
+        _es_analyzer_available = True
+        return True
+    except Exception as exc:
+        if not _is_unknown_analyzer_error(exc):
+            raise
+
+        _es_analyzer_available = False
+        reason = _build_missing_ik_analyzer_message(index_name, action, str(exc))
+        _mark_analyzer_unavailable(reason)
+        if ES_ALLOW_ANALYZER_FALLBACK:
+            _warn_analyzer_fallback(reason)
+            return False
+        raise RuntimeError(reason) from exc
+
+
+def _get_index_analyzer_mode(client, index_name: str) -> str:
+    mapping_payload = client.indices.get_mapping(index=index_name)
+    mapping = mapping_payload.get(index_name, {}).get("mappings", {})
+    return _resolve_analyzer_mode_from_mapping(mapping)
+
+
+def _validate_existing_index_analyzer(client, index_name: str) -> str:
+    mode = _get_index_analyzer_mode(client, index_name)
+    if mode == "ik":
+        return mode
+
+    reason = _build_index_analyzer_mismatch_message(index_name, mode)
+    if ES_ALLOW_ANALYZER_FALLBACK:
+        _warn_analyzer_fallback(reason)
+        return mode
+
+    _mark_analyzer_unavailable(reason)
+    raise RuntimeError(reason)
+
 
 def _text_field_mapping(use_ik_analyzer: bool) -> dict[str, Any]:
     if not use_ik_analyzer:
@@ -184,16 +299,6 @@ def _warn_disabled(action: str) -> None:
     print(f"[elasticsearch] {reason}; skip {action}")
 
 
-def _warn_analyzer_fallback() -> None:
-    global _es_analyzer_fallback_warned
-
-    if _es_analyzer_fallback_warned:
-        return
-
-    _es_analyzer_fallback_warned = True
-    print("[elasticsearch] IK analyzer unavailable; fallback to standard text analyzer")
-
-
 def get_es_client():
     global _es_client
 
@@ -239,14 +344,21 @@ def ensure_index(client=None, index_name: str = ES_INDEX_NAME, recreate: bool = 
         resolved_client.indices.delete(index=index_name)
 
     if resolved_client.indices.exists(index=index_name):
+        _check_ik_analyzer_available(resolved_client, index_name, "validate existing index")
+        _validate_existing_index_analyzer(resolved_client, index_name)
         return True
 
+    use_ik_analyzer = _check_ik_analyzer_available(resolved_client, index_name, "create index")
     try:
-        resolved_client.indices.create(index=index_name, body=_build_index_body(use_ik_analyzer=True))
+        resolved_client.indices.create(index=index_name, body=_build_index_body(use_ik_analyzer=use_ik_analyzer))
     except Exception as exc:
-        if "Unknown analyzer type" not in str(exc):
+        if not _is_unknown_analyzer_error(exc):
             raise
-        _warn_analyzer_fallback()
+        reason = _build_missing_ik_analyzer_message(index_name, "create index", str(exc))
+        _mark_analyzer_unavailable(reason)
+        if not ES_ALLOW_ANALYZER_FALLBACK:
+            raise RuntimeError(reason) from exc
+        _warn_analyzer_fallback(reason)
         resolved_client.indices.create(index=index_name, body=_build_index_body(use_ik_analyzer=False))
     return True
 
@@ -463,6 +575,10 @@ def get_es_runtime_config(index_names: list[str] | None = None) -> dict[str, Any
         "available": False,
         "analyzer_mode": "disabled" if not ES_ENABLED else "unknown",
         "analyzer_modes_by_index": {},
+        "ik_analyzer_required": ES_ENABLED and not ES_ALLOW_ANALYZER_FALLBACK,
+        "ik_analyzer_available": _es_analyzer_available,
+        "analyzer_fallback_allowed": ES_ALLOW_ANALYZER_FALLBACK,
+        "analyzer_blocking_reason": _es_analyzer_unavailable_reason,
         "index_exists_by_name": {},
         "document_counts_by_name": {},
         "ik_fallback_active": False,
@@ -476,6 +592,8 @@ def get_es_runtime_config(index_names: list[str] | None = None) -> dict[str, Any
         client = get_es_client()
     except Exception as exc:
         runtime["unavailable_reason"] = str(exc)
+        runtime["ik_analyzer_available"] = _es_analyzer_available
+        runtime["analyzer_blocking_reason"] = _es_analyzer_unavailable_reason or str(exc)
         return runtime
 
     runtime["available"] = client is not None
@@ -502,6 +620,18 @@ def get_es_runtime_config(index_names: list[str] | None = None) -> dict[str, Any
     runtime["index_exists_by_name"] = index_exists_by_name
     runtime["analyzer_modes_by_index"] = analyzer_modes_by_index
     runtime["ik_fallback_active"] = any(mode == "standard" for mode in analyzer_modes_by_index.values())
+    runtime["ik_analyzer_available"] = _es_analyzer_available
+
+    non_ik_modes = {
+        index_name: mode
+        for index_name, mode in analyzer_modes_by_index.items()
+        if mode != "ik"
+    }
+    if non_ik_modes and not ES_ALLOW_ANALYZER_FALLBACK:
+        first_index_name, first_mode = next(iter(non_ik_modes.items()))
+        runtime["analyzer_blocking_reason"] = _build_index_analyzer_mismatch_message(first_index_name, first_mode)
+    elif _es_analyzer_unavailable_reason:
+        runtime["analyzer_blocking_reason"] = _es_analyzer_unavailable_reason
 
     distinct_modes = sorted(set(analyzer_modes_by_index.values()))
     if not distinct_modes:

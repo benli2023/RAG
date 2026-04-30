@@ -1,3 +1,4 @@
+import json
 import time
 import sys
 from typing import List
@@ -6,9 +7,26 @@ from langchain_core.documents import Document
 
 from documents_service import build_chunk_id, sanitize_metadata
 from retrieval_response_formatter import extract_context_labels
+from rag_config import REMOTE_RPC_GET_RECORDS_PAGE_SIZE, REMOTE_RPC_MAX_BATCH_BYTES
 
 
 _progress_line_length = 0
+MAX_RPC_BATCH_CHUNKS = 500
+
+
+def _iter_vectorstore_records(vectorstore, include: List[str], batch_size: int = REMOTE_RPC_GET_RECORDS_PAGE_SIZE):
+    if hasattr(vectorstore, "iter_records"):
+        yield from vectorstore.iter_records(include=include, batch_size=batch_size)
+        return
+
+    offset = 0
+    while True:
+        records = vectorstore.get_records(include=include, limit=batch_size, offset=offset)
+        yield records
+        next_offset = int(records.get("next_offset", offset + len(records.get("ids", []))))
+        if not records.get("has_more") or next_offset <= offset:
+            break
+        offset = next_offset
 
 
 def _write_progress_line(message: str) -> None:
@@ -18,6 +36,42 @@ def _write_progress_line(message: str) -> None:
     sys.stdout.write(f"\r{message}{' ' * padding}")
     _progress_line_length = len(message)
     sys.stdout.flush()
+
+
+def _estimate_upsert_payload_bytes(chunk_id: str, document: str, metadata: dict) -> int:
+    metadata_json = json.dumps(metadata, ensure_ascii=True, default=str)
+    return len(chunk_id.encode("utf-8")) + len(document.encode("utf-8")) + len(metadata_json.encode("utf-8")) + 256
+
+
+def _build_upsert_batches(ids: list[str], documents: list[str], metadatas: list[dict]) -> list[tuple[list[str], list[str], list[dict]]]:
+    batches: list[tuple[list[str], list[str], list[dict]]] = []
+    current_ids: list[str] = []
+    current_documents: list[str] = []
+    current_metadatas: list[dict] = []
+    current_bytes = 0
+
+    for chunk_id, document, metadata in zip(ids, documents, metadatas):
+        item_bytes = _estimate_upsert_payload_bytes(chunk_id, document, metadata)
+        should_flush = bool(current_ids) and (
+            len(current_ids) >= MAX_RPC_BATCH_CHUNKS
+            or current_bytes + item_bytes > REMOTE_RPC_MAX_BATCH_BYTES
+        )
+        if should_flush:
+            batches.append((current_ids, current_documents, current_metadatas))
+            current_ids = []
+            current_documents = []
+            current_metadatas = []
+            current_bytes = 0
+
+        current_ids.append(chunk_id)
+        current_documents.append(document)
+        current_metadatas.append(metadata)
+        current_bytes += item_bytes
+
+    if current_ids:
+        batches.append((current_ids, current_documents, current_metadatas))
+
+    return batches
 
 
 def upsert_chunks(chunks: List[Document], vectorstore) -> dict:
@@ -52,14 +106,10 @@ def upsert_chunks(chunks: List[Document], vectorstore) -> dict:
 
     upsert_start = time.perf_counter()
     total_documents = len(unique_documents)
-    batch_size = 500  # 避免单次 gRPC 请求超过 4MB 等限制
+    batches = _build_upsert_batches(unique_ids, unique_documents, unique_metadatas)
 
-    for i in range(0, total_documents, batch_size):
-        batch_ids = unique_ids[i : i + batch_size]
-        batch_docs = unique_documents[i : i + batch_size]
-        batch_metas = unique_metadatas[i : i + batch_size]
-
-        _write_progress_line(f"[add_documents] submitting batch {i // batch_size + 1}/{(total_documents - 1) // batch_size + 1} ({len(batch_docs)} chunks) to RPC")
+    for batch_index, (batch_ids, batch_docs, batch_metas) in enumerate(batches, start=1):
+        _write_progress_line(f"[add_documents] submitting batch {batch_index}/{len(batches)} ({len(batch_docs)} chunks) to RPC")
         vectorstore.upsert(
             ids=batch_ids,
             documents=batch_docs,
@@ -97,27 +147,27 @@ def clear_vectorstore(vectorstore) -> int:
 
 
 def get_chunk_statistics(vectorstore) -> dict:
-    records = vectorstore.get_records(include=["metadatas", "documents"])
-    metadatas = records.get("metadatas", [])
-    documents = records.get("documents", [])
-
     domain_counts = {}
     type_counts = {}
     source_file_counts = {}
     header_path_counts = {}
     chunk_lengths = []
 
-    for metadata, document in zip(metadatas, documents):
-        domain, doc_type, headers = extract_context_labels(metadata)
-        source_file = str(metadata.get("source_file", "unknown"))
+    for records in _iter_vectorstore_records(vectorstore, include=["metadatas", "documents"]):
+        metadatas = records.get("metadatas", [])
+        documents = records.get("documents", [])
 
-        domain_counts[domain] = domain_counts.get(domain, 0) + 1
-        type_counts[doc_type] = type_counts.get(doc_type, 0) + 1
-        source_file_counts[source_file] = source_file_counts.get(source_file, 0) + 1
-        header_path_counts[headers] = header_path_counts.get(headers, 0) + 1
-        chunk_lengths.append(len(document))
+        for metadata, document in zip(metadatas, documents):
+            domain, doc_type, headers = extract_context_labels(metadata)
+            source_file = str(metadata.get("source_file", "unknown"))
 
-    total_chunks = len(documents)
+            domain_counts[domain] = domain_counts.get(domain, 0) + 1
+            type_counts[doc_type] = type_counts.get(doc_type, 0) + 1
+            source_file_counts[source_file] = source_file_counts.get(source_file, 0) + 1
+            header_path_counts[headers] = header_path_counts.get(headers, 0) + 1
+            chunk_lengths.append(len(document))
+
+    total_chunks = len(chunk_lengths)
     average_chunk_length = round(sum(chunk_lengths) / total_chunks, 2) if total_chunks else 0
 
     return {
@@ -133,19 +183,17 @@ def get_chunk_statistics(vectorstore) -> dict:
 
 
 def get_grouped_source_files_from_vectorstore(vectorstore) -> List[dict]:
-    records = vectorstore.get_records(include=["metadatas"])
-    metadatas = records.get("metadatas", [])
-
     grouped: dict[str, set[str]] = {}
-    for metadata in metadatas:
-        domain = str(metadata.get("domain", "unknown"))
-        source_file = str(metadata.get("source_file", "")).strip()
-        if not source_file:
-            continue
+    for records in _iter_vectorstore_records(vectorstore, include=["metadatas"]):
+        for metadata in records.get("metadatas", []):
+            domain = str(metadata.get("domain", "unknown"))
+            source_file = str(metadata.get("source_file", "")).strip()
+            if not source_file:
+                continue
 
-        if domain not in grouped:
-            grouped[domain] = set()
-        grouped[domain].add(source_file)
+            if domain not in grouped:
+                grouped[domain] = set()
+            grouped[domain].add(source_file)
 
     return [
         {

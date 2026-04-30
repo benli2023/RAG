@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from rag_config import BM25_RECALL_K, FUSION_TOP_K, VECTOR_RECALL_K
+from rag_config import BM25_RECALL_K, FINAL_CONTEXT_K, FUSION_TOP_K, RERANK_CANDIDATE_K, VECTOR_RECALL_K
 
 
 def _config_path() -> Path:
@@ -61,6 +62,8 @@ def _build_default_query_types() -> dict[str, dict[str, Any]]:
             "vector_k": max(5, VECTOR_RECALL_K // 2),
             "bm25_k": max(BM25_RECALL_K, 30),
             "fusion_top_k": FUSION_TOP_K,
+            "rerank_candidate_k": max(RERANK_CANDIDATE_K, FUSION_TOP_K, 12),
+            "final_context_k": FINAL_CONTEXT_K,
             "vector_weight": 0.5,
             "bm25_weight": 2.0,
             "enabled": True,
@@ -74,6 +77,8 @@ def _build_default_query_types() -> dict[str, dict[str, Any]]:
             "vector_k": VECTOR_RECALL_K,
             "bm25_k": BM25_RECALL_K,
             "fusion_top_k": FUSION_TOP_K,
+            "rerank_candidate_k": max(RERANK_CANDIDATE_K, FUSION_TOP_K),
+            "final_context_k": FINAL_CONTEXT_K,
             "vector_weight": 2.0,
             "bm25_weight": 0.5,
             "enabled": True,
@@ -87,6 +92,8 @@ def _build_default_query_types() -> dict[str, dict[str, Any]]:
             "vector_k": max(VECTOR_RECALL_K, 30),
             "bm25_k": max(BM25_RECALL_K, 30),
             "fusion_top_k": max(FUSION_TOP_K, 15),
+            "rerank_candidate_k": max(RERANK_CANDIDATE_K, FUSION_TOP_K, 16),
+            "final_context_k": max(FINAL_CONTEXT_K, 8),
             "vector_weight": 1.3,
             "bm25_weight": 1.3,
             "enabled": True,
@@ -100,6 +107,8 @@ def _build_default_query_types() -> dict[str, dict[str, Any]]:
             "vector_k": max(10, VECTOR_RECALL_K // 2),
             "bm25_k": max(BM25_RECALL_K, 20),
             "fusion_top_k": FUSION_TOP_K,
+            "rerank_candidate_k": max(RERANK_CANDIDATE_K, FUSION_TOP_K),
+            "final_context_k": max(1, min(FINAL_CONTEXT_K, 5)),
             "vector_weight": 0.8,
             "bm25_weight": 1.6,
             "enabled": True,
@@ -113,6 +122,8 @@ def _build_default_query_types() -> dict[str, dict[str, Any]]:
             "vector_k": max(8, VECTOR_RECALL_K // 2),
             "bm25_k": max(BM25_RECALL_K, 16),
             "fusion_top_k": min(FUSION_TOP_K, 8),
+            "rerank_candidate_k": max(min(RERANK_CANDIDATE_K, 8), min(FUSION_TOP_K, 8)),
+            "final_context_k": max(1, min(FINAL_CONTEXT_K, 5)),
             "vector_weight": 1.0,
             "bm25_weight": 2.2,
             "enabled": True,
@@ -120,8 +131,21 @@ def _build_default_query_types() -> dict[str, dict[str, Any]]:
     }
 
 
-def _load_raw_config() -> dict[str, Any]:
-    config_path = _config_path()
+def _config_cache_token(config_path: Path) -> tuple[str, int, int]:
+    resolved_path = config_path.expanduser().resolve()
+    try:
+        stat = resolved_path.stat()
+    except OSError:
+        return str(resolved_path), 0, 0
+    return str(resolved_path), int(stat.st_mtime_ns), int(stat.st_size)
+
+
+@lru_cache(maxsize=8)
+def _load_raw_config_cached(path_text: str, mtime_ns: int, size: int) -> dict[str, Any]:
+    if mtime_ns == 0 or size == 0:
+        return {}
+
+    config_path = Path(path_text)
     if not config_path.is_file():
         return {}
 
@@ -136,6 +160,11 @@ def _load_raw_config() -> dict[str, Any]:
         print(f"[routing-config] ignore {config_path}: root value must be a JSON object")
         return {}
     return payload
+
+
+def _load_raw_config() -> dict[str, Any]:
+    path_text, mtime_ns, size = _config_cache_token(_config_path())
+    return dict(_load_raw_config_cached(path_text, mtime_ns, size))
 
 
 def _semantic_fallback_definition(query_type: str, default_query_types: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -166,6 +195,8 @@ def _normalize_query_type_definition(
         "vector_k": _coerce_int(candidate_definition.get("vector_k"), int(default_definition.get("vector_k", VECTOR_RECALL_K))),
         "bm25_k": _coerce_int(candidate_definition.get("bm25_k"), int(default_definition.get("bm25_k", BM25_RECALL_K))),
         "fusion_top_k": _coerce_int(candidate_definition.get("fusion_top_k"), int(default_definition.get("fusion_top_k", FUSION_TOP_K))),
+        "rerank_candidate_k": _coerce_int(candidate_definition.get("rerank_candidate_k"), int(default_definition.get("rerank_candidate_k", RERANK_CANDIDATE_K))),
+        "final_context_k": _coerce_int(candidate_definition.get("final_context_k", candidate_definition.get("final_k")), int(default_definition.get("final_context_k", FINAL_CONTEXT_K))),
         "vector_weight": _coerce_float(candidate_definition.get("vector_weight"), float(default_definition.get("vector_weight", 1.0))),
         "bm25_weight": _coerce_float(candidate_definition.get("bm25_weight"), float(default_definition.get("bm25_weight", 1.0))),
         "enabled": _coerce_bool(candidate_definition.get("enabled"), bool(default_definition.get("enabled", True))),

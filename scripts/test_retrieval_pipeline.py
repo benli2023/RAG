@@ -177,6 +177,8 @@ def _document_summary(doc, stage: str) -> dict[str, Any]:
         "type": metadata.get("type", "unknown"),
         "retrieval_sources": list(metadata.get("retrieval_sources", [])),
         "vector_rank": metadata.get("vector_rank"),
+        "vector_score": metadata.get("vector_score"),
+        "vector_distance": metadata.get("vector_distance"),
         "bm25_rank": metadata.get("bm25_rank"),
         "rrf_score": metadata.get("rrf_score"),
         "reranker_score": metadata.get("reranker_score"),
@@ -185,6 +187,20 @@ def _document_summary(doc, stage: str) -> dict[str, Any]:
         "char_count": len(doc.page_content),
         "preview": doc.page_content[:120].replace("\n", " "),
     }
+
+
+def _format_vector_score_metrics(metrics: dict[str, Any]) -> str:
+    scored_hit_count = int(metrics.get("scored_hit_count") or 0)
+    if scored_hit_count <= 0:
+        return "unavailable"
+
+    return (
+        f"scored={scored_hit_count} "
+        f"score_avg={metrics.get('score_avg')} "
+        f"score_max={metrics.get('score_max')} "
+        f"distance_min={metrics.get('distance_min')} "
+        f"distance_avg={metrics.get('distance_avg')}"
+    )
 
 
 def _collect_compression_modes(final_results) -> list[str]:
@@ -326,6 +342,11 @@ def _print_human_report(index_health: dict[str, Any], results: list[dict[str, An
             f"two_stage={metrics.get('two_stage_applied', False)}"
         )
         print(
+            "vector_scores="
+            f"parent[{_format_vector_score_metrics(metrics.get('parent_vector_score_metrics', {}))}] "
+            f"child[{_format_vector_score_metrics(metrics.get('vector_score_metrics', {}))}]"
+        )
+        print(
             "compression="
             f"compressed_docs={compression['compressed_doc_count']} "
             f"saved_chars={compression['saved_char_count']} "
@@ -343,6 +364,7 @@ def _print_human_report(index_health: dict[str, Any], results: list[dict[str, An
             print(
                 f"  - source={doc['source_file']} domain={doc['domain']} "
                 f"sources={doc['retrieval_sources']} compressed={doc['context_compressed']} "
+                f"vector_score={doc['vector_score']} vector_distance={doc['vector_distance']} "
                 f"mode={doc['context_compression_mode']} chars={doc['char_count']} preview={doc['preview']}"
             )
         print()

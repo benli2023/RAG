@@ -8,6 +8,22 @@ ANONYMOUS_USERNAME = "anonymous"
 PUBLIC_SUBJECT = "*"
 AUTHENTICATED_SUBJECT = "$authenticated"
 GROUP_SUBJECT_PREFIX = "group:"
+GET_RECORDS_PAGE_SIZE = 1000
+
+
+def _iter_vectorstore_records(vectorstore: Any, include: list[str], batch_size: int = GET_RECORDS_PAGE_SIZE):
+    if hasattr(vectorstore, "iter_records"):
+        yield from vectorstore.iter_records(include=include, batch_size=batch_size)
+        return
+
+    offset = 0
+    while True:
+        records = vectorstore.get_records(include=include, limit=batch_size, offset=offset)
+        yield records
+        next_offset = int(records.get("next_offset", offset + len(records.get("ids", []))))
+        if not records.get("has_more") or next_offset <= offset:
+            break
+        offset = next_offset
 
 
 def normalize_username(username: str | None) -> str:
@@ -125,38 +141,37 @@ def parse_acl_subjects(metadata: dict[str, Any]) -> set[str]:
 
 
 def load_document_access_manifest(vectorstore: Any) -> list[dict[str, Any]]:
-    try:
-        records = vectorstore.get_records(include=["metadatas"])
-        metadatas = records.get("metadatas", [])
-    except Exception as exc:
-        print(f"[ACL] failed to load metadatas from vectorstore: {exc}")
-        return []
-
     manifest: list[dict[str, Any]] = []
     seen = set()
 
-    for metadata in metadatas:
-        if not isinstance(metadata, dict):
-            continue
+    try:
+        record_pages = _iter_vectorstore_records(vectorstore, include=["metadatas"])
+        for records in record_pages:
+            for metadata in records.get("metadatas", []):
+                if not isinstance(metadata, dict):
+                    continue
 
-        domain = str(metadata.get("domain", "")).strip() or "global"
-        source_file = str(metadata.get("source_file", "")).strip()
-        
-        if not source_file:
-            continue
+                domain = str(metadata.get("domain", "")).strip() or "global"
+                source_file = str(metadata.get("source_file", "")).strip()
+                
+                if not source_file:
+                    continue
 
-        key = f"{domain}:{source_file}"
-        if key in seen:
-            continue
-        seen.add(key)
+                key = f"{domain}:{source_file}"
+                if key in seen:
+                    continue
+                seen.add(key)
 
-        acl_subjects = parse_acl_subjects(metadata)
+                acl_subjects = parse_acl_subjects(metadata)
 
-        manifest.append({
-            "domain": domain,
-            "source_file": source_file,
-            "acl_subjects": acl_subjects,
-        })
+                manifest.append({
+                    "domain": domain,
+                    "source_file": source_file,
+                    "acl_subjects": acl_subjects,
+                })
+    except Exception as exc:
+        print(f"[ACL] failed to load metadatas from vectorstore: {exc}")
+        return []
 
     return manifest
 

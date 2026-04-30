@@ -1,6 +1,7 @@
 import os
 import sys
 import platform
+import time
 
 if platform.system() == "Linux":
     try:
@@ -11,9 +12,9 @@ if platform.system() == "Linux":
 
 from pathlib import Path
 
-import frontmatter
 import yaml
-from fastapi import FastAPI, Header, HTTPException
+import frontmatter
+from fastapi import FastAPI, Header, HTTPException, Response
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from access_control import ANONYMOUS_USERNAME
@@ -22,8 +23,8 @@ from access_control import resolve_accessible_knowledge_bases
 from access_control import resolve_accessible_query_scope
 from api_models import QueryRequest, SourceFileRequest
 from documents_service import assert_document_access, build_index_documents, list_docs_markdown_files, normalize_docs_relative_path
-from knowledge_base_service import get_child_es_index_name, get_knowledge_base_dir, get_module_directory_file, get_parent_es_index_name, list_knowledge_bases, normalize_knowledge_base_name
-from rag_config import DASHBOARD_DIR, DASHBOARD_INDEX, DEFAULT_KNOWLEDGE_BASE, ENABLE_ACL, ENABLE_HTTPS, ENABLE_PARENT_CHILD_RETRIEVAL, ENABLE_SUB_CHUNKING, KNOWLEDGE_BASE_GROUP_MAPPING_FILE, USERNAME_GROUP_MAPPING_FILE, get_runtime_config
+from knowledge_base_service import get_child_collection_name, get_child_es_index_name, get_knowledge_base_dir, get_module_directory_file, get_parent_collection_name, get_parent_es_index_name, list_knowledge_bases, normalize_knowledge_base_name
+from rag_config import DASHBOARD_DIR, DASHBOARD_INDEX, DEFAULT_KNOWLEDGE_BASE, ENABLE_ACL, ENABLE_HTTPS, ENABLE_PARENT_CHILD_RETRIEVAL, ENABLE_SUB_CHUNKING, KNOWLEDGE_BASE_GROUP_MAPPING_FILE, REMOTE_DB_CERT, REMOTE_DB_TARGET, USERNAME_GROUP_MAPPING_FILE, get_runtime_config
 from rag_store import get_parent_vectorstore, get_vectorstore
 from remote_retrieval_service import get_remote_retrieval_service
 from retrieval_strategy_config import get_routing_runtime_config, normalize_query_type
@@ -77,6 +78,38 @@ def _resolve_knowledge_base_runtime(knowledge_base: str | None) -> dict[str, obj
         "es_index_name": get_child_es_index_name(normalized_name),
         "es_parent_index_name": get_parent_es_index_name(normalized_name),
     }
+
+
+def _dependency_check(status: str, message: str, **details: object) -> dict[str, object]:
+    return {
+        "status": status,
+        "message": message,
+        **details,
+    }
+
+
+def _ok_or_error(ok: bool, ok_message: str, error_message: str, **details: object) -> dict[str, object]:
+    return _dependency_check("ok" if ok else "error", ok_message if ok else error_message, **details)
+
+
+def _combine_ready_status(checks: dict[str, dict[str, object]]) -> str:
+    statuses = [str(check.get("status", "error")) for check in checks.values()]
+    if "error" in statuses:
+        return "error"
+    if "warning" in statuses:
+        return "warning"
+    return "ok"
+
+
+def _add_rpc_subcheck(
+    checks: dict[str, dict[str, object]],
+    name: str,
+    rpc_checks: dict[str, object],
+    rpc_name: str,
+) -> None:
+    value = rpc_checks.get(rpc_name)
+    if isinstance(value, dict):
+        checks[name] = dict(value)
 
 
 def get_module_directory_response(knowledge_base: str | None = None) -> dict:
@@ -253,6 +286,114 @@ def get_config(knowledge_base: str = DEFAULT_KNOWLEDGE_BASE):
         str(runtime["es_parent_index_name"]),
     ])
     return runtime_config
+
+
+@app.get("/health")
+def health_check():
+    return {
+        "status": "ok",
+        "service": "rag-backend",
+        "message": "backend process is alive",
+    }
+
+
+@app.get("/ready")
+def ready_check(response: Response, knowledge_base: str = DEFAULT_KNOWLEDGE_BASE):
+    started = time.perf_counter()
+    checks: dict[str, dict[str, object]] = {}
+
+    try:
+        runtime = _resolve_knowledge_base_runtime(knowledge_base)
+        normalized_name = str(runtime["knowledge_base"])
+        docs_dir = runtime["docs_dir"]
+        module_directory_file = runtime["module_directory_file"]
+        child_collection_name = get_child_collection_name(normalized_name)
+        parent_collection_name = get_parent_collection_name(normalized_name)
+        child_es_index_name = str(runtime["es_index_name"])
+        parent_es_index_name = str(runtime["es_parent_index_name"])
+        checks["knowledge_base"] = _dependency_check(
+            "ok",
+            "knowledge base resolved",
+            selected=normalized_name,
+            default=DEFAULT_KNOWLEDGE_BASE,
+        )
+        checks["docs_dir"] = _ok_or_error(
+            isinstance(docs_dir, Path) and docs_dir.is_dir(),
+            "docs directory exists",
+            "docs directory is missing",
+            path=str(docs_dir),
+        )
+        checks["module_directory"] = _ok_or_error(
+            isinstance(module_directory_file, Path) and module_directory_file.is_file(),
+            "module directory exists",
+            "module directory is missing",
+            path=str(module_directory_file),
+        )
+    except Exception as exc:
+        normalized_name = str(knowledge_base or DEFAULT_KNOWLEDGE_BASE)
+        child_collection_name = ""
+        parent_collection_name = ""
+        child_es_index_name = ""
+        parent_es_index_name = ""
+        checks["knowledge_base"] = _dependency_check(
+            "error",
+            "failed to resolve knowledge base",
+            selected=normalized_name,
+            error=str(exc),
+        )
+
+    remote_cert_path = Path(str(REMOTE_DB_CERT)).expanduser()
+    checks["remote_rpc_certificate"] = _ok_or_error(
+        remote_cert_path.is_file(),
+        "remote RPC client certificate exists",
+        "remote RPC client certificate is missing",
+        path=str(remote_cert_path),
+        target=REMOTE_DB_TARGET,
+    )
+
+    if child_collection_name and parent_collection_name:
+        try:
+            rpc_health = get_remote_retrieval_service().health_check(
+                collection_names=[child_collection_name, parent_collection_name],
+                index_names=[child_es_index_name, parent_es_index_name],
+                include_es=True,
+            )
+            rpc_ready = bool(rpc_health.get("ready"))
+            rpc_status = str(rpc_health.get("status") or ("ok" if rpc_ready else "error"))
+            checks["grpc"] = _dependency_check(
+                rpc_status if rpc_ready else "error",
+                "remote RPC health check completed" if rpc_ready else "remote RPC is not ready",
+                target=REMOTE_DB_TARGET,
+                rpc_status=rpc_status,
+            )
+            rpc_checks = rpc_health.get("checks", {})
+            if isinstance(rpc_checks, dict):
+                _add_rpc_subcheck(checks, "rpc_server_certificates", rpc_checks, "certificates")
+                _add_rpc_subcheck(checks, "embedding_model", rpc_checks, "embedding_model")
+                _add_rpc_subcheck(checks, "reranker", rpc_checks, "reranker")
+                _add_rpc_subcheck(checks, "collections", rpc_checks, "collections")
+                _add_rpc_subcheck(checks, "elasticsearch", rpc_checks, "elasticsearch")
+        except Exception as exc:
+            checks["grpc"] = _dependency_check(
+                "error",
+                "remote RPC health check failed",
+                target=REMOTE_DB_TARGET,
+                error=str(exc),
+            )
+
+    status = _combine_ready_status(checks)
+    ready = status != "error"
+    if not ready:
+        response.status_code = 503
+
+    return {
+        "ready": ready,
+        "status": status,
+        "service": "rag-backend",
+        "knowledge_base": normalized_name,
+        "checks": checks,
+        "checked_in_seconds": round(time.perf_counter() - started, 4),
+    }
 
 
 @app.get("/", include_in_schema=False)

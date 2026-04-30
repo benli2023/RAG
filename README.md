@@ -21,7 +21,7 @@ tar -xzf "$HOME/.local/elasticsearch/elasticsearch-9.1.4-darwin-aarch64.tar.gz" 
 rm "$HOME/.local/elasticsearch/elasticsearch-9.1.4-darwin-aarch64.tar.gz"
 ```
 
-安装 Elasticsearch 之后，还需要安装匹配版本的 `analysis-ik` 插件，否则中文 BM25 会退回到标准分词，检索质量会明显下降。插件版本必须和 Elasticsearch 版本一致。
+安装 Elasticsearch 之后，还需要安装匹配版本的 `analysis-ik` 插件，否则中文 BM25 会退回到标准分词，检索质量会明显下降。当前服务默认会阻断缺失 IK analyzer 的 ES 索引创建和已有非 IK 索引使用；只有显式设置 `ES_ALLOW_ANALYZER_FALLBACK=true` 时才允许临时降级。插件版本必须和 Elasticsearch 版本一致。
 
 ```bash
 "$HOME/.local/elasticsearch/elasticsearch-9.1.4/bin/elasticsearch-plugin" install --batch \
@@ -167,6 +167,8 @@ RERANKER_ENABLED = _get_bool_config("RERANKER_ENABLED", True)
 - `RERANKER_ENABLED = True` 时，检索会先走向量召回，再走 CrossEncoder 精排。
 - `RERANKER_ENABLED = False` 时，系统只保留向量召回排序，不加载 reranker 模型。
 - 关闭 reranker 后，`RERANK_CANDIDATE_K` 会自动回退到 `RETRIEVAL_K`，避免无意义扩大候选集。
+- RPC 侧可以通过 `RERANKER_BATCH_SIZE` 控制 CrossEncoder 每批预测的候选数量；检索 trace 会记录 batch size、batch count、predict 耗时和失败原因。
+- `RAG-RPC/retrieval_routing_config.json` 支持按 `query_type` 配置 `rerank_candidate_k` 和 `final_context_k`，便于对 exact、semantic、comparative、factoid、sql_query 做不同候选数和最终上下文数量的压测。
 
 如果你想临时覆盖配置，也可以在启动前设置环境变量：
 
@@ -216,6 +218,15 @@ GET /config
 ```
 
 这个接口会返回当前布尔开关、检索参数、模型配置、路径配置，以及每项配置当前来自配置文件还是环境变量，便于前端展示和排查问题。
+
+部署探针可以使用两个只读接口：
+
+```bash
+GET /health
+GET /ready?knowledge_base=shop
+```
+
+`/health` 只表示 backend 进程存活；`/ready` 会聚合 backend 配置和 RAG-RPC 依赖状态，检查远程 gRPC 连通性、ES index/analyzer 状态、embedding 与 reranker 模型状态、RPC 证书路径、Chroma collection count。只要发现必需依赖不可用，`/ready` 会返回 HTTP 503，并在响应的 `checks` 字段里给出具体失败项；空 collection 或 reranker 尚未懒加载会标记为 warning，方便部署和排障时快速定位风险。
 
 ## 独立部署 gRPC 检索微服务
 

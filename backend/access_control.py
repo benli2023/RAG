@@ -1,5 +1,5 @@
-import glob
 import json
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +13,28 @@ PUBLIC_SUBJECT = "*"
 AUTHENTICATED_SUBJECT = "$authenticated"
 GROUP_SUBJECT_PREFIX = "group:"
 ALL_KNOWLEDGE_BASES = "*"
+
+
+def _file_cache_token(path: Path) -> tuple[str, int, int]:
+    resolved_path = path.expanduser().resolve()
+    try:
+        stat = resolved_path.stat()
+    except OSError:
+        return str(resolved_path), 0, 0
+    return str(resolved_path), int(stat.st_mtime_ns), int(stat.st_size)
+
+
+def _markdown_cache_tokens(docs_dir: Path) -> tuple[tuple[str, int, int], ...]:
+    resolved_docs_dir = docs_dir.expanduser().resolve()
+    tokens: list[tuple[str, int, int]] = []
+    for file_path in sorted(resolved_docs_dir.rglob("*.md")):
+        try:
+            stat = file_path.stat()
+        except OSError:
+            continue
+        relative_path = str(file_path.relative_to(resolved_docs_dir)).replace("\\", "/")
+        tokens.append((relative_path, int(stat.st_mtime_ns), int(stat.st_size)))
+    return tuple(tokens)
 
 
 def normalize_username(username: str | None) -> str:
@@ -65,22 +87,24 @@ def to_group_subject(group_name: str) -> str:
     return f"{GROUP_SUBJECT_PREFIX}{normalized}" if normalized else ""
 
 
-def load_username_group_mapping(mapping_file: Path) -> dict[str, set[str]]:
-    if not mapping_file.is_file():
-        return {}
+@lru_cache(maxsize=32)
+def _load_username_group_mapping_cached(path_text: str, mtime_ns: int, size: int) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    mapping_file = Path(path_text)
+    if mtime_ns == 0 or size == 0 or not mapping_file.is_file():
+        return tuple()
 
     try:
         with open(mapping_file, "r", encoding="utf-8") as file_handle:
             raw_mapping = json.load(file_handle)
     except (OSError, json.JSONDecodeError) as exc:
         print(f"[ACL] failed to load username group mapping: {exc}")
-        return {}
+        return tuple()
 
     if not isinstance(raw_mapping, dict):
         print("[ACL] ignore username group mapping: root value must be a JSON object")
-        return {}
+        return tuple()
 
-    mapping: dict[str, set[str]] = {}
+    mapping: dict[str, tuple[str, ...]] = {}
     for raw_username, raw_groups in raw_mapping.items():
         if not isinstance(raw_username, str):
             continue
@@ -92,9 +116,15 @@ def load_username_group_mapping(mapping_file: Path) -> dict[str, set[str]]:
             if to_group_subject(group_name)
         }
         if username and group_subjects:
-            mapping[username] = group_subjects
+            mapping[username] = tuple(sorted(group_subjects))
 
-    return mapping
+    return tuple(sorted(mapping.items()))
+
+
+def load_username_group_mapping(mapping_file: Path) -> dict[str, set[str]]:
+    path_text, mtime_ns, size = _file_cache_token(mapping_file)
+    cached_mapping = _load_username_group_mapping_cached(path_text, mtime_ns, size)
+    return {username: set(groups) for username, groups in cached_mapping}
 
 
 def coerce_knowledge_base_list(value: Any) -> set[str]:
@@ -112,22 +142,24 @@ def coerce_knowledge_base_list(value: Any) -> set[str]:
     return set()
 
 
-def load_knowledge_base_group_mapping(mapping_file: Path) -> dict[str, set[str]]:
-    if not mapping_file.is_file():
-        return {}
+@lru_cache(maxsize=32)
+def _load_knowledge_base_group_mapping_cached(path_text: str, mtime_ns: int, size: int) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    mapping_file = Path(path_text)
+    if mtime_ns == 0 or size == 0 or not mapping_file.is_file():
+        return tuple()
 
     try:
         with open(mapping_file, "r", encoding="utf-8") as file_handle:
             raw_mapping = json.load(file_handle)
     except (OSError, json.JSONDecodeError) as exc:
         print(f"[ACL] failed to load knowledge base group mapping: {exc}")
-        return {}
+        return tuple()
 
     if not isinstance(raw_mapping, dict):
         print("[ACL] ignore knowledge base group mapping: root value must be a JSON object")
-        return {}
+        return tuple()
 
-    mapping: dict[str, set[str]] = {}
+    mapping: dict[str, tuple[str, ...]] = {}
     for raw_group_name, raw_knowledge_bases in raw_mapping.items():
         if not isinstance(raw_group_name, str):
             continue
@@ -146,9 +178,15 @@ def load_knowledge_base_group_mapping(mapping_file: Path) -> dict[str, set[str]]
                 print(f"[ACL] ignore invalid knowledge base mapping for group '{group_name}': {exc}")
 
         if group_name and knowledge_bases:
-            mapping[group_name] = knowledge_bases
+            mapping[group_name] = tuple(sorted(knowledge_bases))
 
-    return mapping
+    return tuple(sorted(mapping.items()))
+
+
+def load_knowledge_base_group_mapping(mapping_file: Path) -> dict[str, set[str]]:
+    path_text, mtime_ns, size = _file_cache_token(mapping_file)
+    cached_mapping = _load_knowledge_base_group_mapping_cached(path_text, mtime_ns, size)
+    return {group_name: set(knowledge_bases) for group_name, knowledge_bases in cached_mapping}
 
 
 def parse_acl_subjects(metadata: dict[str, Any]) -> set[str]:
@@ -183,27 +221,46 @@ def parse_acl_subjects(metadata: dict[str, Any]) -> set[str]:
     return set()
 
 
-def load_document_access_manifest(docs_dir: Path) -> list[dict[str, Any]]:
-    manifest: list[dict[str, Any]] = []
-    md_files = sorted(glob.glob(f"{docs_dir}/**/*.md", recursive=True))
+@lru_cache(maxsize=16)
+def _load_document_access_manifest_cached(
+    docs_dir_text: str,
+    markdown_tokens: tuple[tuple[str, int, int], ...],
+) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
+    docs_dir = Path(docs_dir_text)
+    manifest: list[tuple[str, str, tuple[str, ...]]] = []
 
-    for file_path in md_files:
-        path_obj = Path(file_path)
-        with open(path_obj, "r", encoding="utf-8") as file_handle:
-            post = frontmatter.load(file_handle)
+    for relative_path, _, _ in markdown_tokens:
+        path_obj = docs_dir / relative_path
+        try:
+            with open(path_obj, "r", encoding="utf-8") as file_handle:
+                post = frontmatter.load(file_handle)
+        except OSError as exc:
+            print(f"[ACL] failed to load document ACL metadata from {path_obj}: {exc}")
+            continue
 
         metadata = post.metadata if isinstance(post.metadata, dict) else {}
         domain = str(metadata.get("domain") or path_obj.parent.name or "global").strip()
-        source_file = str(path_obj.resolve().relative_to(docs_dir.resolve())).replace("\\", "/")
+        source_file = relative_path.replace("\\", "/")
         acl_subjects = parse_acl_subjects(metadata)
 
-        manifest.append({
+        manifest.append((domain, source_file, tuple(sorted(acl_subjects))))
+
+    return tuple(manifest)
+
+
+def load_document_access_manifest(docs_dir: Path) -> list[dict[str, Any]]:
+    resolved_docs_dir = docs_dir.expanduser().resolve()
+    markdown_tokens = _markdown_cache_tokens(resolved_docs_dir)
+    cached_manifest = _load_document_access_manifest_cached(str(resolved_docs_dir), markdown_tokens)
+
+    return [
+        {
             "domain": domain,
             "source_file": source_file,
-            "acl_subjects": acl_subjects,
-        })
-
-    return manifest
+            "acl_subjects": set(acl_subjects),
+        }
+        for domain, source_file, acl_subjects in cached_manifest
+    ]
 
 
 def resolve_user_subjects(username: str, group_mapping: dict[str, set[str]] | None = None) -> set[str]:
@@ -366,39 +423,45 @@ def resolve_accessible_query_scope(
 ) -> tuple[list[str], list[str]]:
     normalized_requested_domains = dedupe_values(requested_domains or [])
     normalized_requested_source_files = dedupe_values(requested_source_files or [])
+    manifest = load_document_access_manifest(docs_dir)
+    group_mapping = load_username_group_mapping(username_group_mapping_file)
+    user_subjects = resolve_user_subjects(normalize_username(username), group_mapping)
+    requested_domain_set = set(normalized_requested_domains)
+    requested_source_file_set = set(normalized_requested_source_files)
 
     if not normalized_requested_domains and not normalized_requested_source_files:
-        accessible_source_files, _, accessible_domains = resolve_accessible_sources(
-            username,
-            [],
-            docs_dir,
-            username_group_mapping_file,
-        )
+        accessible_entries = [
+            entry for entry in manifest
+            if is_document_accessible(user_subjects, entry["acl_subjects"])
+        ]
+        accessible_source_files = dedupe_values([entry["source_file"] for entry in accessible_entries])
+        accessible_domains = sorted({entry["domain"] for entry in accessible_entries})
         return accessible_domains, accessible_source_files
 
-    accessible_domains: list[str] = []
-    accessible_source_files: list[str] = []
+    matched_entries: list[dict[str, Any]] = []
+    domain_matched_entries: list[dict[str, Any]] = []
+    source_file_matched_entries: list[dict[str, Any]] = []
+
+    for entry in manifest:
+        matches_domain = bool(requested_domain_set) and entry["domain"] in requested_domain_set
+        matches_source_file = bool(requested_source_file_set) and entry["source_file"] in requested_source_file_set
+        if not matches_domain and not matches_source_file:
+            continue
+        if not is_document_accessible(user_subjects, entry["acl_subjects"]):
+            continue
+
+        matched_entries.append(entry)
+        if matches_domain:
+            domain_matched_entries.append(entry)
+        if matches_source_file:
+            source_file_matched_entries.append(entry)
 
     if normalized_requested_domains:
-        domain_source_files, _, domain_accessible_domains = resolve_accessible_sources(
-            username,
-            normalized_requested_domains,
-            docs_dir,
-            username_group_mapping_file,
-        )
-        accessible_source_files.extend(domain_source_files)
-        accessible_domains = domain_accessible_domains
+        accessible_domains = sorted({entry["domain"] for entry in domain_matched_entries})
+    else:
+        accessible_domains = dedupe_values([str(entry["domain"]).strip() for entry in source_file_matched_entries if str(entry["domain"]).strip()])
 
-    if normalized_requested_source_files:
-        source_file_source_files, _, source_file_accessible_domains = resolve_accessible_source_files(
-            username,
-            normalized_requested_source_files,
-            docs_dir,
-            username_group_mapping_file,
-        )
-        accessible_source_files.extend(source_file_source_files)
-        if not normalized_requested_domains:
-            accessible_domains = source_file_accessible_domains
+    accessible_source_files = [entry["source_file"] for entry in matched_entries]
 
     return dedupe_values(accessible_domains), dedupe_values(accessible_source_files)
 

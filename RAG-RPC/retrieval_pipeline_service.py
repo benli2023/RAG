@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from langchain_core.documents import Document
@@ -10,16 +11,23 @@ from es_service import search_bm25_documents
 from faq_support import rank_results_for_generation
 from hybrid_retrieval_service import reciprocal_rank_fusion
 from knowledge_base_service import get_child_es_index_name, get_parent_es_index_name, normalize_knowledge_base_name
-from rag_config import BM25_RECALL_K, CONTEXT_COMPRESSION_ENABLED, CONTEXT_COMPRESSION_MIN_CHARS, CONTEXT_COMPRESSION_SENTENCE_K, ENABLE_PARENT_CHILD_RETRIEVAL, FINAL_CONTEXT_K, FUSION_TOP_K, PARENT_RECALL_K, PRINT_LOGGING_ENABLED, RERANKER_ENABLED, RRF_K, VECTOR_RECALL_K
+from rag_config import BM25_RECALL_K, CONTEXT_COMPRESSION_ENABLED, CONTEXT_COMPRESSION_MIN_CHARS, CONTEXT_COMPRESSION_SENTENCE_K, ENABLE_PARENT_CHILD_RETRIEVAL, FINAL_CONTEXT_K, FUSION_TOP_K, PARENT_RECALL_K, PRINT_LOGGING_ENABLED, RERANKER_ENABLED, RERANK_CANDIDATE_K, RRF_K, VECTOR_RECALL_K
 from rag_store import get_parent_vectorstore, get_vectorstore
 from retrieval_strategy_config import get_retrieval_strategy_plan, normalize_query_type
-from reranker_service import rerank_documents
+from reranker_service import rerank_documents_with_metrics
 from retrieval_response_formatter import build_retrieval_response
+
+
+GET_RECORDS_PAGE_SIZE = 1000
 
 
 def _log_print(*args, **kwargs):
     if PRINT_LOGGING_ENABLED:
         print(*args, **kwargs)
+
+
+def _elapsed_seconds(start_time: float) -> float:
+    return round(time.perf_counter() - start_time, 6)
 
 
 def _normalize_top_k(top_k: int | None) -> int:
@@ -32,6 +40,17 @@ def _normalize_top_k(top_k: int | None) -> int:
         return FINAL_CONTEXT_K
 
     return max(1, normalized)
+
+
+def _resolve_final_context_k(top_k: int | None, retrieval_plan: dict[str, Any]) -> int:
+    if top_k is not None:
+        return _normalize_top_k(top_k)
+
+    try:
+        planned_final_context_k = int(retrieval_plan.get("final_context_k", FINAL_CONTEXT_K))
+    except (TypeError, ValueError):
+        planned_final_context_k = FINAL_CONTEXT_K
+    return max(1, planned_final_context_k)
 
 
 def _coerce_metadata_list(value: object) -> list[str]:
@@ -131,6 +150,10 @@ def _build_trace(
             "selected_hit_count": 0,
             "final_hit_count": 0,
             "shared_fused_hit_count": 0,
+            "parent_vector_score_metrics": {},
+            "vector_score_metrics": {},
+            "reranker": {},
+            "timings": {},
             "two_stage_enabled": ENABLE_PARENT_CHILD_RETRIEVAL,
             "two_stage_applied": False,
             "two_stage_fallback_reason": "disabled",
@@ -165,6 +188,67 @@ def _compute_compression_metrics(selected_results: list[Document], final_results
         "saved_char_count": saved_char_count,
         "saved_ratio": saved_ratio,
     }
+
+
+def _coerce_metric_float(value: object) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _summarize_numeric_values(values: list[float]) -> dict[str, float | None]:
+    if not values:
+        return {
+            "min": None,
+            "max": None,
+            "avg": None,
+        }
+
+    return {
+        "min": round(min(values), 6),
+        "max": round(max(values), 6),
+        "avg": round(sum(values) / len(values), 6),
+    }
+
+
+def _compute_vector_score_metrics(documents: list[Document]) -> dict[str, Any]:
+    scores: list[float] = []
+    distances: list[float] = []
+
+    for doc in documents:
+        score = _coerce_metric_float(doc.metadata.get("vector_score"))
+        distance = _coerce_metric_float(doc.metadata.get("vector_distance"))
+        if score is not None:
+            scores.append(score)
+        if distance is not None:
+            distances.append(distance)
+
+    score_summary = _summarize_numeric_values(scores)
+    distance_summary = _summarize_numeric_values(distances)
+    return {
+        "hit_count": len(documents),
+        "scored_hit_count": len(scores),
+        "distance_hit_count": len(distances),
+        "score_min": score_summary["min"],
+        "score_max": score_summary["max"],
+        "score_avg": score_summary["avg"],
+        "distance_min": distance_summary["min"],
+        "distance_max": distance_summary["max"],
+        "distance_avg": distance_summary["avg"],
+    }
+
+
+def _format_vector_score_metrics(metrics: dict[str, Any]) -> str:
+    scored_hit_count = int(metrics.get("scored_hit_count") or 0)
+    if scored_hit_count <= 0:
+        return "unavailable"
+
+    return (
+        f"scored={scored_hit_count}, "
+        f"score_avg={metrics.get('score_avg')}, score_max={metrics.get('score_max')}, "
+        f"distance_min={metrics.get('distance_min')}, distance_avg={metrics.get('distance_avg')}"
+    )
 
 
 def _extract_source_files(documents: list[Document]) -> list[str]:
@@ -235,31 +319,36 @@ def _resolve_sql_source_files(source_files: list[str], domains: list[str], query
     source_file_set = set(dedupe_values(source_files)) if source_files else None
     domain_set = set(dedupe_values(domains)) if domains else None
 
+    structured_source_files: list[str] = []
     try:
-        records = vectorstore.get_records(include=["metadatas"])
-        metadatas = records.get("metadatas", [])
+        offset = 0
+        while True:
+            records = vectorstore.get_records(include=["metadatas"], limit=GET_RECORDS_PAGE_SIZE, offset=offset)
+            for metadata in records.get("metadatas", []):
+                if not isinstance(metadata, dict):
+                    continue
+                
+                doc_type = str(metadata.get("type", "")).strip().lower()
+                if doc_type != "reference":
+                    continue
+
+                source_file = str(metadata.get("source_file", "")).strip()
+                domain = str(metadata.get("domain", "")).strip()
+                if not source_file:
+                    continue
+                if source_file_set is not None and source_file not in source_file_set:
+                    continue
+                if domain_set is not None and domain not in domain_set:
+                    continue
+                
+                structured_source_files.append(source_file)
+
+            next_offset = int(records.get("next_offset", offset + len(records.get("ids", []))))
+            if not records.get("has_more") or next_offset <= offset:
+                break
+            offset = next_offset
     except Exception:
         return dedupe_values(source_files)
-
-    structured_source_files: list[str] = []
-    for metadata in metadatas:
-        if not isinstance(metadata, dict):
-            continue
-        
-        doc_type = str(metadata.get("type", "")).strip().lower()
-        if doc_type != "reference":
-            continue
-
-        source_file = str(metadata.get("source_file", "")).strip()
-        domain = str(metadata.get("domain", "")).strip()
-        if not source_file:
-            continue
-        if source_file_set is not None and source_file not in source_file_set:
-            continue
-        if domain_set is not None and domain not in domain_set:
-            continue
-        
-        structured_source_files.append(source_file)
 
     if structured_source_files:
         return dedupe_values(structured_source_files)
@@ -282,12 +371,16 @@ def _run_child_recall(
     filter_value: dict | None,
     vectorstore,
     es_index_name: str,
-) -> tuple[list[Document], list[Document], list[Document]]:
+) -> tuple[list[Document], list[Document], list[Document], dict[str, float]]:
+    recall_start = time.perf_counter()
+    vector_start = time.perf_counter()
     if filter_value is not None:
-        vector_results = vectorstore.similarity_search(query, k=int(retrieval_plan["vector_k"]), filter=filter_value)
+        vector_results = vectorstore.similarity_search_with_score(query, k=int(retrieval_plan["vector_k"]), filter=filter_value)
     else:
-        vector_results = vectorstore.similarity_search(query, k=int(retrieval_plan["vector_k"]))
+        vector_results = vectorstore.similarity_search_with_score(query, k=int(retrieval_plan["vector_k"]))
+    vector_search_seconds = _elapsed_seconds(vector_start)
 
+    bm25_start = time.perf_counter()
     bm25_results = search_bm25_documents(
         query=query,
         source_files=source_files or None,
@@ -295,16 +388,26 @@ def _run_child_recall(
         index_name=es_index_name,
         limit=int(retrieval_plan["bm25_k"]),
     )
+    bm25_search_seconds = _elapsed_seconds(bm25_start)
 
+    fusion_start = time.perf_counter()
     fused_results = reciprocal_rank_fusion(
         vector_results,
         bm25_results,
         k=RRF_K,
         vector_weight=float(retrieval_plan["vector_weight"]),
         bm25_weight=float(retrieval_plan["bm25_weight"]),
-    )[: int(retrieval_plan["fusion_top_k"])]
+    )[: int(retrieval_plan.get("rerank_candidate_k", retrieval_plan["fusion_top_k"]))]
+    fusion_seconds = _elapsed_seconds(fusion_start)
 
-    return vector_results, bm25_results, fused_results
+    timings = {
+        "child_vector_search_seconds": vector_search_seconds,
+        "child_bm25_search_seconds": bm25_search_seconds,
+        "child_fusion_seconds": fusion_seconds,
+        "child_recall_seconds": _elapsed_seconds(recall_start),
+    }
+
+    return vector_results, bm25_results, fused_results, timings
 
 
 def _build_observability_payload(
@@ -320,6 +423,9 @@ def _build_observability_payload(
     two_stage_fallback_reason: str,
     requested_execution_mode: str,
     resolved_execution_mode: str,
+    parent_vector_score_metrics: dict[str, Any],
+    vector_score_metrics: dict[str, Any],
+    reranker_metrics: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "query_type": query_type,
@@ -335,8 +441,10 @@ def _build_observability_payload(
             "vector_k": int(retrieval_plan.get("vector_k", VECTOR_RECALL_K)),
             "bm25_k": int(retrieval_plan.get("bm25_k", BM25_RECALL_K)),
             "fusion_top_k": int(retrieval_plan.get("fusion_top_k", FUSION_TOP_K)),
+            "rerank_candidate_k": int(retrieval_plan.get("rerank_candidate_k", RERANK_CANDIDATE_K)),
             "final_context_k": final_context_k,
         },
+        "reranker": reranker_metrics,
         "requested_domains": requested_domains,
         "target_domains": target_domains,
         "routed_domains": routed_domains,
@@ -344,6 +452,10 @@ def _build_observability_payload(
         "target_source_file_count": target_source_file_count,
         "two_stage_applied": two_stage_applied,
         "two_stage_fallback_reason": two_stage_fallback_reason,
+        "score_metrics": {
+            "parent_vector": parent_vector_score_metrics,
+            "vector": vector_score_metrics,
+        },
     }
 
 
@@ -357,11 +469,11 @@ def run_retrieval_pipeline(
     knowledge_base: str | None = None,
     debug: bool = False,
 ) -> dict[str, Any]:
+    pipeline_start = time.perf_counter()
     normalized_query = query.strip()
     normalized_username = normalize_username(username)
     normalized_query_type = normalize_query_type(query_type)
     normalized_knowledge_base = normalize_knowledge_base_name(knowledge_base)
-    requested_top_k = _normalize_top_k(top_k)
     normalized_scope_domains = dedupe_values(domains or [])
     normalized_scope_source_files = dedupe_values(source_files or [])
     vectorstore = get_vectorstore(normalized_knowledge_base)
@@ -369,12 +481,19 @@ def run_retrieval_pipeline(
     es_index_name = get_child_es_index_name(normalized_knowledge_base)
     es_parent_index_name = get_parent_es_index_name(normalized_knowledge_base)
     retrieval_plan = dict(get_retrieval_strategy_plan(normalized_query_type))
-    retrieval_plan["fusion_top_k"] = max(int(retrieval_plan.get("fusion_top_k", FUSION_TOP_K)), requested_top_k)
+    requested_top_k = _normalize_top_k(top_k) if top_k is not None else None
+    effective_final_context_k = _resolve_final_context_k(top_k, retrieval_plan)
+    retrieval_plan["final_context_k"] = effective_final_context_k
+    retrieval_plan["fusion_top_k"] = max(int(retrieval_plan.get("fusion_top_k", FUSION_TOP_K)), effective_final_context_k)
+    retrieval_plan["rerank_candidate_k"] = max(
+        int(retrieval_plan.get("rerank_candidate_k", RERANK_CANDIDATE_K)),
+        int(retrieval_plan["fusion_top_k"]),
+        effective_final_context_k,
+    )
     requested_strategy = str(retrieval_plan.get("strategy", "unknown"))
     requested_execution_mode = str(retrieval_plan.get("execution_mode", "hybrid")).strip() or "hybrid"
     supported_execution_modes = {"hybrid", "sql_query"}
     resolved_execution_mode = requested_execution_mode if requested_execution_mode in supported_execution_modes else "hybrid"
-    effective_final_context_k = requested_top_k
     filter_value = build_source_file_filter(normalized_scope_source_files) if normalized_scope_source_files else None
     
     if resolved_execution_mode == "hybrid" and _is_sql_query_candidate(normalized_query):
@@ -406,6 +525,20 @@ def run_retrieval_pipeline(
     parent_results: list[Document] = []
     parent_vector_results: list[Document] = []
     parent_bm25_results: list[Document] = []
+    parent_stage_timings = {
+        "parent_collection_count_seconds": 0.0,
+        "parent_vector_search_seconds": 0.0,
+        "parent_bm25_search_seconds": 0.0,
+        "parent_dedupe_seconds": 0.0,
+        "parent_fusion_seconds": 0.0,
+        "parent_stage_seconds": 0.0,
+    }
+    child_recall_timings = {
+        "child_vector_search_seconds": 0.0,
+        "child_bm25_search_seconds": 0.0,
+        "child_fusion_seconds": 0.0,
+        "child_recall_seconds": 0.0,
+    }
     narrowed_source_files = list(normalized_scope_source_files)
     narrowed_domains = list(normalized_scope_domains)
     effective_authorized_source_files = list(normalized_scope_source_files)
@@ -416,21 +549,27 @@ def run_retrieval_pipeline(
     two_stage_fallback_reason = "disabled"
 
     if ENABLE_PARENT_CHILD_RETRIEVAL:
+        parent_stage_start = time.perf_counter()
         parent_scope_source_files = normalized_scope_source_files
         parent_filter_value = build_source_file_filter(parent_scope_source_files) if parent_scope_source_files else None
+        parent_count_start = time.perf_counter()
         parent_collection_count = _collection_count(parent_vectorstore)
+        parent_stage_timings["parent_collection_count_seconds"] = _elapsed_seconds(parent_count_start)
         _log_print(
             f"INFO: 阶段一父文档双路召回，parent_k={PARENT_RECALL_K}, "
             f"authorized_docs={len(normalized_scope_source_files)}, authorized_domains={normalized_scope_domains}, filter={parent_filter_value}"
         )
         if parent_collection_count > 0:
+            parent_vector_start = time.perf_counter()
             if parent_filter_value is not None:
-                parent_vector_results = parent_vectorstore.similarity_search(normalized_query, k=PARENT_RECALL_K, filter=parent_filter_value)
+                parent_vector_results = parent_vectorstore.similarity_search_with_score(normalized_query, k=PARENT_RECALL_K, filter=parent_filter_value)
             else:
-                parent_vector_results = parent_vectorstore.similarity_search(normalized_query, k=PARENT_RECALL_K)
+                parent_vector_results = parent_vectorstore.similarity_search_with_score(normalized_query, k=PARENT_RECALL_K)
+            parent_stage_timings["parent_vector_search_seconds"] = _elapsed_seconds(parent_vector_start)
         else:
             _log_print("INFO: 父向量索引为空，阶段一跳过向量召回")
 
+        parent_bm25_start = time.perf_counter()
         parent_bm25_results = search_bm25_documents(
             query=normalized_query,
             source_files=normalized_scope_source_files or None,
@@ -438,11 +577,14 @@ def run_retrieval_pipeline(
             index_name=es_parent_index_name,
             limit=PARENT_RECALL_K,
         )
+        parent_stage_timings["parent_bm25_search_seconds"] = _elapsed_seconds(parent_bm25_start)
 
         raw_parent_vector_hit_count = len(parent_vector_results)
         raw_parent_bm25_hit_count = len(parent_bm25_results)
+        parent_dedupe_start = time.perf_counter()
         parent_vector_results = _dedupe_documents_by_source_file(parent_vector_results)
         parent_bm25_results = _dedupe_documents_by_source_file(parent_bm25_results)
+        parent_stage_timings["parent_dedupe_seconds"] = _elapsed_seconds(parent_dedupe_start)
         if len(parent_vector_results) != raw_parent_vector_hit_count or len(parent_bm25_results) != raw_parent_bm25_hit_count:
             _log_print(
                 f"INFO: 阶段一按 source_file 去重，"
@@ -450,7 +592,9 @@ def run_retrieval_pipeline(
                 f"parent_bm25_hits={raw_parent_bm25_hit_count}->{len(parent_bm25_results)}"
             )
 
+        parent_fusion_start = time.perf_counter()
         parent_results = reciprocal_rank_fusion(parent_vector_results, parent_bm25_results, k=RRF_K)[:PARENT_RECALL_K]
+        parent_stage_timings["parent_fusion_seconds"] = _elapsed_seconds(parent_fusion_start)
 
         if parent_results:
             parent_target_source_files = _extract_source_files(parent_results)
@@ -478,6 +622,7 @@ def run_retrieval_pipeline(
         else:
             two_stage_fallback_reason = "no-parent-hits"
             _log_print("INFO: 阶段一双路召回未命中父文档，回退到当前单层检索")
+        parent_stage_timings["parent_stage_seconds"] = _elapsed_seconds(parent_stage_start)
 
     child_filter_value = build_source_file_filter(narrowed_source_files) if narrowed_source_files else filter_value
 
@@ -497,10 +642,11 @@ def run_retrieval_pipeline(
             f"vector_k={retrieval_plan['vector_k']}, bm25_k={retrieval_plan['bm25_k']}, "
             f"vector_weight={retrieval_plan['vector_weight']}, bm25_weight={retrieval_plan['bm25_weight']}, "
             f"fusion_top_k={retrieval_plan['fusion_top_k']}, final_top_k={effective_final_context_k}, "
+            f"rerank_candidate_k={retrieval_plan['rerank_candidate_k']}, "
             f"target_files={len(sql_target_source_files)}, target_domains={narrowed_domains}, filter={sql_filter_value}"
         )
 
-        vector_results, bm25_results, fused_results = _run_child_recall(
+        vector_results, bm25_results, fused_results, child_recall_timings = _run_child_recall(
             query=normalized_query,
             retrieval_plan=retrieval_plan,
             source_files=sql_target_source_files or narrowed_source_files or normalized_scope_source_files,
@@ -520,10 +666,11 @@ def run_retrieval_pipeline(
             f"vector_k={retrieval_plan['vector_k']}, bm25_k={retrieval_plan['bm25_k']}, "
             f"vector_weight={retrieval_plan['vector_weight']}, bm25_weight={retrieval_plan['bm25_weight']}, "
             f"fusion_top_k={retrieval_plan['fusion_top_k']}, final_top_k={effective_final_context_k}, "
+            f"rerank_candidate_k={retrieval_plan['rerank_candidate_k']}, "
             f"reranker_enabled={RERANKER_ENABLED}, target_files={len(narrowed_source_files)}, target_domains={narrowed_domains}, filter={child_filter_value}"
         )
 
-        vector_results, bm25_results, fused_results = _run_child_recall(
+        vector_results, bm25_results, fused_results, child_recall_timings = _run_child_recall(
             query=normalized_query,
             retrieval_plan=retrieval_plan,
             source_files=narrowed_source_files or normalized_scope_source_files,
@@ -536,10 +683,31 @@ def run_retrieval_pipeline(
         _log_print(f"INFO: 混合召回完成，vector_hits={len(vector_results)}, bm25_hits={len(bm25_results)}")
         _log_print(f"INFO: RRF 融合完成，fused_hits={len(fused_results)}")
 
-    reranked_results = rank_results_for_generation(normalized_query, rerank_documents(normalized_query, fused_results))
+    parent_vector_score_metrics = _compute_vector_score_metrics(parent_vector_results)
+    vector_score_metrics = _compute_vector_score_metrics(vector_results)
+    _log_print(
+        "INFO: 向量召回分数，"
+        f"parent={_format_vector_score_metrics(parent_vector_score_metrics)}, "
+        f"child={_format_vector_score_metrics(vector_score_metrics)}"
+    )
+
+    rerank_start = time.perf_counter()
+    reranked_by_model, reranker_metrics = rerank_documents_with_metrics(normalized_query, fused_results)
+    generation_rank_start = time.perf_counter()
+    reranked_results = rank_results_for_generation(normalized_query, reranked_by_model)
+    generation_rank_seconds = _elapsed_seconds(generation_rank_start)
+    rerank_seconds = _elapsed_seconds(rerank_start)
+    _log_print(
+        "INFO: Reranker 完成，"
+        f"status={reranker_metrics.get('status')}, candidates={reranker_metrics.get('candidate_count')}, "
+        f"scored={reranker_metrics.get('scored_count')}, batch_size={reranker_metrics.get('batch_size')}, "
+        f"batches={reranker_metrics.get('batch_count')}, predict_seconds={reranker_metrics.get('predict_seconds')}, "
+        f"fallback={reranker_metrics.get('fallback_used')}, failure={reranker_metrics.get('failure_reason')}"
+    )
     selected_results = reranked_results[:effective_final_context_k]
     final_results = selected_results
 
+    compression_start = time.perf_counter()
     if CONTEXT_COMPRESSION_ENABLED and selected_results:
         final_results = compress_context(
             query=normalized_query,
@@ -555,6 +723,18 @@ def run_retrieval_pipeline(
         )
     else:
         compression_metrics = _compute_compression_metrics(selected_results, final_results)
+    compression_seconds = _elapsed_seconds(compression_start)
+
+    timing_metrics = {
+        **parent_stage_timings,
+        **child_recall_timings,
+        "reranker_model_resolve_seconds": float(reranker_metrics.get("model_resolve_seconds") or 0.0),
+        "reranker_predict_seconds": float(reranker_metrics.get("predict_seconds") or 0.0),
+        "generation_rank_seconds": generation_rank_seconds,
+        "rerank_seconds": rerank_seconds,
+        "compression_seconds": compression_seconds,
+        "total_retrieval_seconds": _elapsed_seconds(pipeline_start),
+    }
 
     trace["parent_results"] = parent_results
     trace["parent_vector_results"] = parent_vector_results
@@ -583,6 +763,10 @@ def run_retrieval_pipeline(
         "selected_hit_count": len(selected_results),
         "final_hit_count": len(final_results),
         "shared_fused_hit_count": sum(1 for doc in fused_results if len(doc.metadata.get("retrieval_sources", [])) > 1),
+        "parent_vector_score_metrics": parent_vector_score_metrics,
+        "vector_score_metrics": vector_score_metrics,
+        "reranker": reranker_metrics,
+        "timings": timing_metrics,
         "query_type": normalized_query_type,
         "strategy": retrieval_plan["strategy"],
         "requested_strategy": requested_strategy,
@@ -592,6 +776,7 @@ def run_retrieval_pipeline(
         "bm25_weight": retrieval_plan["bm25_weight"],
         "requested_top_k": requested_top_k,
         "final_context_k": effective_final_context_k,
+        "rerank_candidate_k": retrieval_plan["rerank_candidate_k"],
         "two_stage_enabled": ENABLE_PARENT_CHILD_RETRIEVAL,
         "two_stage_applied": two_stage_applied,
         "two_stage_fallback_reason": two_stage_fallback_reason,
@@ -611,6 +796,9 @@ def run_retrieval_pipeline(
         two_stage_fallback_reason=two_stage_fallback_reason,
         requested_execution_mode=requested_execution_mode,
         resolved_execution_mode=resolved_execution_mode,
+        parent_vector_score_metrics=parent_vector_score_metrics,
+        vector_score_metrics=vector_score_metrics,
+        reranker_metrics=reranker_metrics,
     )
     if debug:
         diagnostics["requested_strategy"] = requested_strategy

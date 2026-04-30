@@ -1,0 +1,73 @@
+modules:
+  - name: bench-domain-00
+    summary: Synthetic benchmark module bench-domain-00 for retrieval latency measurement.
+    keywords:
+      - bench-domain-00
+      - benchmark
+      - performance
+  - name: bench-domain-01
+    summary: Synthetic benchmark module bench-domain-01 for retrieval latency measurement.
+    keywords:
+      - bench-domain-01
+      - benchmark
+      - performance
+  - name: bench-domain-02
+    summary: Synthetic benchmark module bench-domain-02 for retrieval latency measurement.
+    keywords:
+      - bench-domain-02
+      - benchmark
+      - performance
+  - name: bench-domain-03
+    summary: Synthetic benchmark module bench-domain-03 for retrieval latency measurement.
+    keywords:
+      - bench-domain-03
+      - benchmark
+      - performance
+  - name: bench-domain-04
+    summary: Synthetic benchmark module bench-domain-04 for retrieval latency measurement.
+    keywords:
+      - bench-domain-04
+      - benchmark
+      - performance
+  - name: bench-domain-05
+    summary: Synthetic benchmark module bench-domain-05 for retrieval latency measurement.
+    keywords:
+      - bench-domain-05
+      - benchmark
+      - performance
+  - name: bench-domain-06
+    summary: Synthetic benchmark module bench-domain-06 for retrieval latency measurement.
+    keywords:
+      - bench-domain-06
+      - benchmark
+      - performance
+  - name: bench-domain-07
+    summary: Synthetic benchmark module bench-domain-07 for retrieval latency measurement.
+    keywords:
+      - bench-domain-07
+      - benchmark
+      - performance
+  - name: bench-domain-08
+    summary: Synthetic benchmark module bench-domain-08 for retrieval latency measurement.
+    keywords:
+      - bench-domain-08
+      - benchmark
+      - performance
+  - name: bench-domain-09
+    summary: Synthetic benchmark module bench-domain-09 for retrieval latency measurement.
+    keywords:
+      - bench-domain-09
+      - benchmark
+      - performance
+  - name: bench-domain-10
+    summary: Synthetic benchmark module bench-domain-10 for retrieval latency measurement.
+    keywords:
+      - bench-domain-10
+      - benchmark
+      - performance
+  - name: bench-domain-11
+    summary: Synthetic benchmark module bench-domain-11 for retrieval latency measurement.
+    keywords:
+      - bench-domain-11
+      - benchmark
+      - performance
