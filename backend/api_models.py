@@ -8,6 +8,10 @@ class SourceFileRequest(BaseModel):
     knowledge_base: str = DEFAULT_KNOWLEDGE_BASE
 
 
+class KnowledgeBaseCreateRequest(BaseModel):
+    knowledge_base: str
+
+
 class QueryRequest(BaseModel):
     query: str
     domains: list[str] = Field(default_factory=list)

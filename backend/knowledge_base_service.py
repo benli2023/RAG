@@ -35,6 +35,32 @@ def list_knowledge_bases() -> list[str]:
     )
 
 
+def create_knowledge_base(knowledge_base: str | None) -> tuple[Path, bool]:
+    normalized_name = normalize_knowledge_base_name(knowledge_base, fallback="")
+    if normalized_name.startswith("."):
+        raise ValueError(f"invalid knowledge_base: {knowledge_base}")
+
+    docs_root = DOCS_DIR.resolve()
+    knowledge_base_dir = (docs_root / normalized_name).resolve()
+
+    try:
+        knowledge_base_dir.relative_to(docs_root)
+    except ValueError as exc:
+        raise ValueError(f"invalid knowledge_base: {knowledge_base}") from exc
+
+    if knowledge_base_dir.exists() and not knowledge_base_dir.is_dir():
+        raise FileExistsError(f"knowledge base path is not a directory: {normalized_name}")
+
+    created = not knowledge_base_dir.exists()
+    knowledge_base_dir.mkdir(parents=True, exist_ok=True)
+
+    module_directory_file = knowledge_base_dir / "module-directory.yaml"
+    if not module_directory_file.exists():
+        module_directory_file.write_text("modules: []\n", encoding="utf-8")
+
+    return knowledge_base_dir, created
+
+
 def get_knowledge_base_dir(knowledge_base: str | None = None) -> Path:
     normalized_name = normalize_knowledge_base_name(knowledge_base)
     docs_dir = (DOCS_DIR / normalized_name).resolve()

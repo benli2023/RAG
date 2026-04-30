@@ -21,9 +21,9 @@ from access_control import ANONYMOUS_USERNAME
 from access_control import is_knowledge_base_accessible
 from access_control import resolve_accessible_knowledge_bases
 from access_control import resolve_accessible_query_scope
-from api_models import QueryRequest, SourceFileRequest
+from api_models import KnowledgeBaseCreateRequest, QueryRequest, SourceFileRequest
 from documents_service import assert_document_access, build_index_documents, list_docs_markdown_files, normalize_docs_relative_path
-from knowledge_base_service import get_child_collection_name, get_child_es_index_name, get_knowledge_base_dir, get_module_directory_file, get_parent_collection_name, get_parent_es_index_name, list_knowledge_bases, normalize_knowledge_base_name
+from knowledge_base_service import create_knowledge_base, get_child_collection_name, get_child_es_index_name, get_knowledge_base_dir, get_module_directory_file, get_parent_collection_name, get_parent_es_index_name, list_knowledge_bases, normalize_knowledge_base_name
 from rag_config import DASHBOARD_DIR, DASHBOARD_INDEX, DEFAULT_KNOWLEDGE_BASE, ENABLE_ACL, ENABLE_HTTPS, ENABLE_PARENT_CHILD_RETRIEVAL, ENABLE_SUB_CHUNKING, KNOWLEDGE_BASE_GROUP_MAPPING_FILE, REMOTE_DB_CERT, REMOTE_DB_TARGET, USERNAME_GROUP_MAPPING_FILE, get_runtime_config
 from rag_store import get_parent_vectorstore, get_vectorstore
 from remote_retrieval_service import get_remote_retrieval_service
@@ -145,6 +145,25 @@ def list_available_knowledge_bases(username: str = ANONYMOUS_USERNAME):
         "knowledge_bases": knowledge_bases,
         "accessible_knowledge_bases": accessible_knowledge_bases,
         "username": username,
+    }
+
+
+@app.post("/knowledge-bases")
+def create_available_knowledge_base(req: KnowledgeBaseCreateRequest):
+    try:
+        knowledge_base_dir, created = create_knowledge_base(req.knowledge_base)
+    except (ValueError, FileExistsError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    normalized_name = normalize_knowledge_base_name(req.knowledge_base, fallback="")
+    module_directory_file = get_module_directory_file(normalized_name)
+    return {
+        "knowledge_base": normalized_name,
+        "created": created,
+        "message": f"知识库 {normalized_name} 已创建。" if created else f"知识库 {normalized_name} 已存在。",
+        "docs_dir": str(knowledge_base_dir),
+        "module_directory_file": str(module_directory_file),
+        "knowledge_bases": list_knowledge_bases(),
     }
 
 # ================= 4. [入库 API] 带元数据解析的自定义切片 =================

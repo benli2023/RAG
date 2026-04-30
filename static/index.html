@@ -339,6 +339,27 @@
           return JSON.stringify(data, null, 2);
         }
 
+        function cleanKnowledgeBaseName(value) {
+          return String(value || "").trim();
+        }
+
+        function getKnowledgeBaseNameError(value) {
+          const cleaned = cleanKnowledgeBaseName(value);
+          if (!cleaned) {
+            return "请输入知识库名称。";
+          }
+
+          if (cleaned === "." || cleaned === ".." || cleaned.indexOf("/") >= 0 || cleaned.indexOf("\\") >= 0) {
+            return "知识库名称不能包含路径分隔符，也不能是 . 或 ..。";
+          }
+
+          if (cleaned.charAt(0) === ".") {
+            return "知识库名称不能以 . 开头。";
+          }
+
+          return "";
+        }
+
         async function callApi(config) {
           const requestUrl = buildApiUrl(config.baseUrl, config.path, config.knowledgeBase);
           const requestBody = attachKnowledgeBase(config.body, config.path, config.knowledgeBase);
@@ -547,6 +568,13 @@
           const [host, setHost] = React.useState(initialHost);
           const [port, setPort] = React.useState(initialPort);
           const [knowledgeBase, setKnowledgeBase] = React.useState(initialKnowledgeBase);
+          const [knowledgeBaseDraft, setKnowledgeBaseDraft] = React.useState(initialKnowledgeBase);
+          const [knowledgeBases, setKnowledgeBases] = React.useState([]);
+          const [accessibleKnowledgeBases, setAccessibleKnowledgeBases] = React.useState([]);
+          const [knowledgeBaseBusy, setKnowledgeBaseBusy] = React.useState(false);
+          const [knowledgeBaseError, setKnowledgeBaseError] = React.useState("");
+          const [newKnowledgeBase, setNewKnowledgeBase] = React.useState("");
+          const [workspaceNotice, setWorkspaceNotice] = React.useState("");
           const [activePage, setActivePage] = React.useState("maintenance");
           const [sourceFile, setSourceFile] = React.useState("");
           const [docOptions, setDocOptions] = React.useState([]);
@@ -579,6 +607,85 @@
             }
           }
 
+          async function loadKnowledgeBases() {
+            setKnowledgeBaseBusy(true);
+            setKnowledgeBaseError("");
+            try {
+              const data = await callApi({ baseUrl: baseUrl, method: "GET", path: "/knowledge-bases" });
+              const allKnowledgeBases = Array.isArray(data.knowledge_bases) ? data.knowledge_bases : [];
+              const visibleKnowledgeBases = Array.isArray(data.accessible_knowledge_bases)
+                ? data.accessible_knowledge_bases
+                : allKnowledgeBases;
+              setKnowledgeBases(allKnowledgeBases);
+              setAccessibleKnowledgeBases(visibleKnowledgeBases);
+              if (!knowledgeBase && data.default_knowledge_base) {
+                setKnowledgeBase(data.default_knowledge_base);
+                setKnowledgeBaseDraft(data.default_knowledge_base);
+              }
+              return data;
+            } catch (runtimeError) {
+              setKnowledgeBaseError(runtimeError.message || String(runtimeError));
+              return null;
+            } finally {
+              setKnowledgeBaseBusy(false);
+            }
+          }
+
+          function applyKnowledgeBaseSelection(value) {
+            const cleaned = cleanKnowledgeBaseName(value || knowledgeBaseDraft);
+            const validationError = getKnowledgeBaseNameError(cleaned);
+            if (validationError) {
+              setKnowledgeBaseError(validationError);
+              return;
+            }
+
+            setKnowledgeBaseError("");
+            setWorkspaceNotice(`已切换到知识库 ${cleaned}。`);
+            setKnowledgeBase(cleaned);
+            setKnowledgeBaseDraft(cleaned);
+            setSourceFile("");
+            setDocKeyword("");
+            setError("");
+            setResult({ message: `正在加载知识库 ${cleaned} 的文档与配置。` });
+          }
+
+          async function runCreateKnowledgeBase() {
+            const cleaned = cleanKnowledgeBaseName(newKnowledgeBase);
+            const validationError = getKnowledgeBaseNameError(cleaned);
+            if (validationError) {
+              setKnowledgeBaseError(validationError);
+              return;
+            }
+
+            setKnowledgeBaseBusy(true);
+            setKnowledgeBaseError("");
+            setWorkspaceNotice("");
+            try {
+              const data = await callApi({
+                baseUrl: baseUrl,
+                method: "POST",
+                path: "/knowledge-bases",
+                body: { knowledge_base: cleaned },
+              });
+              const nextKnowledgeBases = Array.isArray(data.knowledge_bases) ? data.knowledge_bases : knowledgeBases.concat([cleaned]);
+              const dedupedKnowledgeBases = Array.from(new Set(nextKnowledgeBases.filter(Boolean))).sort();
+              setKnowledgeBases(dedupedKnowledgeBases);
+              setAccessibleKnowledgeBases(dedupedKnowledgeBases);
+              setNewKnowledgeBase("");
+              setKnowledgeBase(cleaned);
+              setKnowledgeBaseDraft(cleaned);
+              setSourceFile("");
+              setDocKeyword("");
+              setWorkspaceNotice(data.message || `知识库 ${cleaned} 已就绪。`);
+              setResult(data);
+              setActivePage("maintenance");
+            } catch (runtimeError) {
+              setKnowledgeBaseError(runtimeError.message || String(runtimeError));
+            } finally {
+              setKnowledgeBaseBusy(false);
+            }
+          }
+
           function runListDocuments() {
             return runAction(async function () {
               const groupedData = await callApi({ baseUrl: baseUrl, method: "GET", path: "/docs/grouped", knowledgeBase: knowledgeBase });
@@ -598,9 +705,9 @@
                 return next;
               });
               setDocOptions(docs);
-              if (!sourceFile && docs.length > 0) {
-                setSourceFile(docs[0]);
-              }
+              setSourceFile(function (prev) {
+                return docs.indexOf(prev) >= 0 ? prev : (docs[0] || "");
+              });
               return {
                 message: `已从向量库加载 ${modules.length} 个模块，${docs.length} 份文档。`,
                 modules: modules,
@@ -625,6 +732,28 @@
           function runStats() {
             return runAction(function () {
               return callApi({ baseUrl: baseUrl, method: "GET", path: "/chunks/stats", knowledgeBase: knowledgeBase });
+            });
+          }
+
+          function runIngest() {
+            return runAction(function () {
+              return callApi({ baseUrl: baseUrl, method: "POST", path: "/ingest", knowledgeBase: knowledgeBase });
+            });
+          }
+
+          function runClearIndex() {
+            if (!window.confirm(`确认清空知识库 ${knowledgeBase} 的全部索引？文档文件不会被删除。`)) {
+              return;
+            }
+
+            return runAction(function () {
+              return callApi({ baseUrl: baseUrl, method: "POST", path: "/clear", knowledgeBase: knowledgeBase });
+            });
+          }
+
+          function runModuleDirectory() {
+            return runAction(function () {
+              return callApi({ baseUrl: baseUrl, method: "GET", path: "/docs/module-directory", knowledgeBase: knowledgeBase });
             });
           }
 
@@ -702,7 +831,7 @@
           }
 
           function runRebuild() {
-            if (!window.confirm("确认执行全量重建索引？该操作将先清空再重建全部文档索引。")) {
+            if (!window.confirm(`确认重建知识库 ${knowledgeBase} 的全部索引？该操作将先清空再重新入库。`)) {
               return;
             }
 
@@ -745,6 +874,10 @@
           }
 
           React.useEffect(function () {
+            loadKnowledgeBases();
+          }, [baseUrl]);
+
+          React.useEffect(function () {
             runListDocuments();
             loadRuntimeConfig();
           }, [baseUrl, knowledgeBase]);
@@ -767,6 +900,11 @@
               return item.path === "/docs/module-directory";
             });
           }, []);
+          const knowledgeBaseOptions = React.useMemo(function () {
+            const visibleKnowledgeBases = accessibleKnowledgeBases.length > 0 ? accessibleKnowledgeBases : knowledgeBases;
+            return Array.from(new Set(visibleKnowledgeBases.concat([knowledgeBase]).filter(Boolean))).sort();
+          }, [accessibleKnowledgeBases, knowledgeBases, knowledgeBase]);
+          const selectedKnowledgeBaseKnown = (accessibleKnowledgeBases.length > 0 ? accessibleKnowledgeBases : knowledgeBases).indexOf(knowledgeBase) >= 0;
           const availableDomains = React.useMemo(function () {
             const dynamicDomains = moduleGroups.map(function (group) {
               return String(group.domain || "");
@@ -892,11 +1030,179 @@
                 )
               ),
               h(
+                DashboardSection,
+                { sx: { mb: 2.5 } },
+                h(
+                  Stack,
+                  { spacing: 1.5 },
+                  h(
+                    Stack,
+                    { direction: { xs: "column", md: "row" }, justifyContent: "space-between", gap: 1.5, alignItems: { xs: "flex-start", md: "center" } },
+                    h(
+                      Box,
+                      null,
+                      h(Typography, { variant: "h6" }, "知识库工作区"),
+                      h(Typography, { variant: "body2", sx: { opacity: 0.72, mt: 0.35 } }, `当前管理: ${knowledgeBase}`)
+                    ),
+                    h(
+                      Stack,
+                      { direction: "row", gap: 1, flexWrap: "wrap", alignItems: "center" },
+                      knowledgeBaseBusy ? h(CircularProgress, { size: 18 }) : null,
+                      h(Button, { variant: "outlined", onClick: loadKnowledgeBases, disabled: knowledgeBaseBusy }, "刷新知识库"),
+                      h(Button, { variant: "contained", onClick: function () { applyKnowledgeBaseSelection(knowledgeBaseDraft); }, disabled: knowledgeBaseBusy || busy }, "切换")
+                    )
+                  ),
+                  knowledgeBaseError
+                    ? h(Alert, { severity: "error", sx: { borderRadius: 3 } }, knowledgeBaseError)
+                    : workspaceNotice
+                      ? h(Alert, { severity: "success", sx: { borderRadius: 3 } }, workspaceNotice)
+                      : null,
+                  h(
+                    Box,
+                    {
+                      sx: {
+                        display: "grid",
+                        gridTemplateColumns: { xs: "1fr", lg: "1.05fr 1.25fr 1fr" },
+                        gap: 1.5,
+                        alignItems: "stretch",
+                      },
+                    },
+                    h(
+                      Box,
+                      {
+                        sx: {
+                          p: 1.5,
+                          borderRadius: 3,
+                          border: "1px solid rgba(30,36,51,0.12)",
+                          bgcolor: "rgba(255,255,255,0.48)",
+                        },
+                      },
+                      h(Typography, { variant: "caption", sx: { opacity: 0.72 } }, "服务连接"),
+                      h(
+                        Box,
+                        { sx: { display: "grid", gridTemplateColumns: { xs: "1fr", sm: "0.75fr 1.45fr 0.8fr" }, gap: 1, mt: 1 } },
+                        h(TextField, {
+                          label: "协议",
+                          value: protocol,
+                          onChange: function (event) {
+                            setProtocol(event.target.value.trim() || "http");
+                          },
+                          placeholder: "http",
+                          size: "small",
+                        }),
+                        h(TextField, {
+                          label: "主机",
+                          value: host,
+                          onChange: function (event) {
+                            setHost(event.target.value.trim() || "127.0.0.1");
+                          },
+                          placeholder: "127.0.0.1",
+                          size: "small",
+                        }),
+                        h(TextField, {
+                          label: "端口",
+                          value: port,
+                          onChange: function (event) {
+                            setPort(event.target.value.trim() || "8000");
+                          },
+                          placeholder: "8000",
+                          size: "small",
+                        })
+                      ),
+                      h(Typography, { variant: "caption", sx: { display: "block", mt: 1, opacity: 0.72, wordBreak: "break-all" } }, baseUrl)
+                    ),
+                    h(
+                      Box,
+                      {
+                        sx: {
+                          p: 1.5,
+                          borderRadius: 3,
+                          border: "1px solid rgba(30,36,51,0.12)",
+                          bgcolor: "rgba(255,255,255,0.48)",
+                        },
+                      },
+                      h(Typography, { variant: "caption", sx: { opacity: 0.72 } }, "切换知识库"),
+                      h(Autocomplete, {
+                        freeSolo: true,
+                        options: knowledgeBaseOptions,
+                        value: knowledgeBaseDraft,
+                        inputValue: knowledgeBaseDraft,
+                        onChange: function (_event, value) {
+                          setKnowledgeBaseDraft(value || "");
+                        },
+                        onInputChange: function (_event, value) {
+                          setKnowledgeBaseDraft(value || "");
+                        },
+                        renderInput: function (params) {
+                          return h(TextField, Object.assign({}, params, {
+                            label: "知识库名称",
+                            placeholder: "shop",
+                            size: "small",
+                            sx: { mt: 1 },
+                          }));
+                        },
+                      }),
+                      selectedKnowledgeBaseKnown
+                        ? null
+                        : h(Alert, { severity: "warning", sx: { mt: 1, borderRadius: 3 } }, "当前名称不在知识库列表中，切换前请确认目录已创建。"),
+                      h(
+                        Stack,
+                        { direction: "row", gap: 0.8, flexWrap: "wrap", sx: { mt: 1 } },
+                        knowledgeBaseOptions.length > 0
+                          ? knowledgeBaseOptions.map(function (item) {
+                              return h(Chip, {
+                                key: item,
+                                label: item,
+                                color: item === knowledgeBase ? "primary" : "default",
+                                variant: item === knowledgeBase ? "filled" : "outlined",
+                                onClick: function () {
+                                  applyKnowledgeBaseSelection(item);
+                                },
+                                sx: { fontWeight: item === knowledgeBase ? 700 : 500 },
+                              });
+                            })
+                          : h(Typography, { variant: "caption", sx: { opacity: 0.72 } }, "暂无可切换知识库")
+                      )
+                    ),
+                    h(
+                      Box,
+                      {
+                        sx: {
+                          p: 1.5,
+                          borderRadius: 3,
+                          border: "1px solid rgba(30,36,51,0.12)",
+                          bgcolor: "rgba(255,255,255,0.48)",
+                        },
+                      },
+                      h(Typography, { variant: "caption", sx: { opacity: 0.72 } }, "新建知识库"),
+                      h(TextField, {
+                        label: "新知识库名称",
+                        value: newKnowledgeBase,
+                        onChange: function (event) {
+                          setNewKnowledgeBase(event.target.value || "");
+                        },
+                        onKeyDown: function (event) {
+                          if (event.key === "Enter") {
+                            runCreateKnowledgeBase();
+                          }
+                        },
+                        placeholder: "shop2",
+                        size: "small",
+                        fullWidth: true,
+                        sx: { mt: 1 },
+                      }),
+                      h(Typography, { variant: "caption", sx: { display: "block", mt: 1, opacity: 0.72 } }, "创建 docs/<名称>/module-directory.yaml 后自动切换。"),
+                      h(Button, { variant: "contained", color: "secondary", fullWidth: true, sx: { mt: 1.2 }, onClick: runCreateKnowledgeBase, disabled: knowledgeBaseBusy || busy }, knowledgeBaseBusy ? "处理中..." : "创建并切换")
+                    )
+                  )
+                )
+              ),
+              h(
                 Box,
                 {
                   sx: {
                     display: "grid",
-                    gridTemplateColumns: { xs: "1fr", md: "repeat(3, minmax(0, 1fr))" },
+                    gridTemplateColumns: { xs: "1fr", md: "repeat(4, minmax(0, 1fr))" },
                     gap: 1.5,
                     mb: 2.5,
                   },
@@ -910,8 +1216,14 @@
                 h(
                   DashboardSection,
                   { sx: { p: 1.75 } },
+                  h(Typography, { variant: "caption", sx: { opacity: 0.75 } }, "当前知识库"),
+                  h(Typography, { variant: "h6", sx: { wordBreak: "break-word" } }, knowledgeBase)
+                ),
+                h(
+                  DashboardSection,
+                  { sx: { p: 1.75 } },
                   h(Typography, { variant: "caption", sx: { opacity: 0.75 } }, "可维护文档"),
-                  h(Typography, { variant: "h6" }, `${docOptions.length} 份`)
+                  h(Typography, { variant: "h6" }, `${moduleGroups.length} 模块 / ${docOptions.length} 份`)
                 ),
                 h(
                   DashboardSection,
@@ -926,7 +1238,7 @@
                     {
                       sx: {
                         display: "grid",
-                        gridTemplateColumns: { xs: "1fr", lg: "420px minmax(0, 1fr)" },
+                        gridTemplateColumns: { xs: "1fr", xl: "700px minmax(0, 1fr)" },
                         gap: 2.5,
                         alignItems: "start",
                       },
@@ -937,53 +1249,27 @@
                       h(
                         DashboardSection,
                         null,
-                        h(Typography, { variant: "h6", sx: { mb: 1.2 } }, "系统连接"),
+                        h(Typography, { variant: "h6", sx: { mb: 1.2 } }, "索引操作"),
+                        h(Alert, { severity: "info", sx: { mb: 1.5 } }, `当前操作目标: ${knowledgeBase}`),
                         h(
                           Stack,
-                          { spacing: 1.5 },
-                          h(TextField, {
-                            label: "协议",
-                            value: protocol,
-                            onChange: function (event) {
-                              setProtocol(event.target.value.trim() || "http");
-                            },
-                            placeholder: "http",
-                            size: "small",
-                          }),
-                          h(TextField, {
-                            label: "主机",
-                            value: host,
-                            onChange: function (event) {
-                              setHost(event.target.value.trim() || "127.0.0.1");
-                            },
-                            placeholder: "127.0.0.1",
-                            size: "small",
-                          }),
-                          h(TextField, {
-                            label: "端口",
-                            value: port,
-                            onChange: function (event) {
-                              setPort(event.target.value.trim() || "8000");
-                            },
-                            placeholder: "8000",
-                            size: "small",
-                          }),
-                          h(TextField, {
-                            label: "知识库",
-                            value: knowledgeBase,
-                            onChange: function (event) {
-                              setKnowledgeBase(event.target.value.trim() || "shop");
-                            },
-                            placeholder: "shop",
-                            size: "small",
-                            helperText: "对应 docs/ 下的目录名，例如 shop、shop1、shop2。",
-                          }),
-                          h(
-                            Stack,
-                            { direction: "row", gap: 1, flexWrap: "wrap" },
-                            h(Button, { variant: "outlined", onClick: runListDocuments, disabled: busy }, "同步文档目录"),
-                            h(Button, { variant: "outlined", onClick: runStats, disabled: busy }, "查看索引统计")
-                          )
+                          { direction: "row", gap: 1, flexWrap: "wrap" },
+                          h(Button, { variant: "contained", onClick: runIngest, disabled: busy }, "构建当前库索引"),
+                          h(Button, { variant: "outlined", onClick: runListDocuments, disabled: busy }, "同步文档目录"),
+                          h(Button, { variant: "outlined", onClick: runStats, disabled: busy }, "查看索引统计"),
+                          h(Button, { variant: "outlined", onClick: runModuleDirectory, disabled: busy }, "查看模块目录")
+                        )
+                      ),
+                      h(
+                        DashboardSection,
+                        null,
+                        h(Typography, { variant: "h6", sx: { mb: 1.2 } }, "当前知识库文件"),
+                        h(
+                          Stack,
+                          { direction: "row", gap: 1, flexWrap: "wrap" },
+                          h(Chip, { label: `${moduleGroups.length} 个模块`, variant: "outlined" }),
+                          h(Chip, { label: `${docOptions.length} 份文档`, variant: "outlined" }),
+                          h(Chip, { label: selectedLabel, color: sourceFile ? "primary" : "default", variant: "outlined", sx: { maxWidth: "100%" } })
                         )
                       ),
                       h(
@@ -1069,8 +1355,8 @@
                                 {
                                   sx: {
                                     display: "grid",
-                                    gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" },
-                                    gap: 1.25,
+                                    gridTemplateColumns: { xs: "1fr", lg: "repeat(2, minmax(0, 1fr))", xl: "1fr" },
+                                    gap: 1.5,
                                   },
                                 },
                                 h(
@@ -1246,6 +1532,7 @@
                           Stack,
                           { direction: "row", gap: 1, flexWrap: "wrap" },
                           h(Button, { variant: "outlined", color: "warning", onClick: runDeleteBySourceFile, disabled: busy }, "删除当前文档索引"),
+                          h(Button, { variant: "outlined", color: "warning", onClick: runClearIndex, disabled: busy }, "清空当前库索引"),
                           h(Button, { variant: "contained", color: "secondary", onClick: runRebuild, disabled: busy }, "全量重建索引")
                         )
                       )
