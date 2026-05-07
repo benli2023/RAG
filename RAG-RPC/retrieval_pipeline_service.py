@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import time
 from typing import Any
 
@@ -7,6 +8,7 @@ from langchain_core.documents import Document
 
 from access_control import build_source_file_filter, dedupe_values, normalize_username
 from context_compression_service import compress_context
+from documents_service import build_chunk_id
 from es_service import search_bm25_documents
 from faq_support import rank_results_for_generation
 from hybrid_retrieval_service import reciprocal_rank_fusion
@@ -162,6 +164,8 @@ def _build_trace(
                 "min_char_count": CONTEXT_COMPRESSION_MIN_CHARS,
                 "sentence_limit": CONTEXT_COMPRESSION_SENTENCE_K,
                 "compressed_doc_count": 0,
+                "high_relevance_preserved_doc_count": 0,
+                "high_relevance_preserved_docs": [],
                 "original_char_count": 0,
                 "compressed_char_count": 0,
                 "saved_char_count": 0,
@@ -176,6 +180,29 @@ def _compute_compression_metrics(selected_results: list[Document], final_results
     compressed_char_count = sum(len(doc.page_content) for doc in final_results)
     saved_char_count = max(original_char_count - compressed_char_count, 0)
     compressed_doc_count = sum(1 for doc in final_results if doc.metadata.get("context_compressed") is True)
+    high_relevance_preserved_docs = [
+        {
+            "final_rank": index + 1,
+            "source_file": str(doc.metadata.get("source_file", "")).strip(),
+            "chunk_index": doc.metadata.get("chunk_index"),
+            "reranker_score": doc.metadata.get("reranker_score"),
+            "headers": " > ".join(
+                str(value)
+                for _, value in sorted(
+                    (
+                        (key, value)
+                        for key, value in doc.metadata.items()
+                        if key.startswith("Header") and isinstance(value, str) and value.strip()
+                    ),
+                    key=lambda item: item[0],
+                )
+            ),
+            "preserved_original": True,
+            "reason": "high_relevance",
+        }
+        for index, doc in enumerate(final_results)
+        if doc.metadata.get("context_compression_skip_reason") == "high_relevance"
+    ]
     saved_ratio = round(saved_char_count / original_char_count, 4) if original_char_count else 0.0
 
     return {
@@ -183,6 +210,8 @@ def _compute_compression_metrics(selected_results: list[Document], final_results
         "min_char_count": CONTEXT_COMPRESSION_MIN_CHARS,
         "sentence_limit": CONTEXT_COMPRESSION_SENTENCE_K,
         "compressed_doc_count": compressed_doc_count,
+        "high_relevance_preserved_doc_count": len(high_relevance_preserved_docs),
+        "high_relevance_preserved_docs": high_relevance_preserved_docs,
         "original_char_count": original_char_count,
         "compressed_char_count": compressed_char_count,
         "saved_char_count": saved_char_count,
@@ -258,6 +287,137 @@ def _extract_source_files(documents: list[Document]) -> list[str]:
         if source_file:
             source_files.append(source_file)
     return dedupe_values(source_files)
+
+
+def _normalize_document_text(value: object) -> str:
+    return " ".join(str(value or "").split()).strip()
+
+
+def _coerce_optional_str(value: object) -> str:
+    return str(value).strip() if value is not None else ""
+
+
+def _coerce_metric_int(value: object) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _document_title_fallback_parts(metadata: dict[str, Any]) -> list[str]:
+    fallback_parts: list[str] = []
+    for field_name in ("parent_title", "title", "Header 1", "Header 2", "Header 3"):
+        cleaned_value = _coerce_optional_str(metadata.get(field_name))
+        if cleaned_value and cleaned_value not in fallback_parts:
+            fallback_parts.append(cleaned_value)
+    return fallback_parts
+
+
+def _document_dedupe_key(doc: Document) -> str:
+    if not isinstance(doc.metadata, dict):
+        doc.metadata = dict(doc.metadata or {})
+
+    metadata = doc.metadata
+    existing_key = _coerce_optional_str(metadata.get("retrieval_dedupe_key"))
+    if existing_key:
+        return existing_key
+
+    source_file = _coerce_optional_str(metadata.get("source_file"))
+    normalized_content = _normalize_document_text(doc.page_content)
+    if source_file and normalized_content:
+        content_digest = hashlib.sha256(normalized_content.encode("utf-8")).hexdigest()
+        key = f"source_content:{source_file}|{content_digest}"
+    else:
+        chunk_id = _coerce_optional_str(metadata.get("chunk_id"))
+        if chunk_id:
+            key = f"chunk_id:{chunk_id}"
+        else:
+            chunk_index = metadata.get("chunk_index")
+            if source_file and chunk_index not in (None, ""):
+                try:
+                    key = f"chunk_index:{build_chunk_id(metadata, int(chunk_index), doc.page_content)}"
+                except (TypeError, ValueError):
+                    key = f"chunk_index:{source_file}|{chunk_index}"
+            else:
+                title_fallback_parts = _document_title_fallback_parts(metadata)
+                if source_file and title_fallback_parts:
+                    key = f"title:{source_file}|{'|'.join(title_fallback_parts)}"
+                elif normalized_content:
+                    content_digest = hashlib.sha256(normalized_content.encode("utf-8")).hexdigest()
+                    key = f"content:{content_digest}"
+                elif source_file:
+                    key = f"source:{source_file}"
+                else:
+                    fallback_digest = hashlib.sha256(str(metadata).encode("utf-8")).hexdigest()
+                    key = f"fallback:{fallback_digest}"
+
+    metadata["retrieval_dedupe_key"] = key
+    return key
+
+
+def _merge_fused_duplicate(existing_doc: Document, duplicate_doc: Document) -> None:
+    merged_sources: list[str] = []
+    for source in list(existing_doc.metadata.get("retrieval_sources", [])) + list(duplicate_doc.metadata.get("retrieval_sources", [])):
+        cleaned_source = _coerce_optional_str(source)
+        if cleaned_source and cleaned_source not in merged_sources:
+            merged_sources.append(cleaned_source)
+    if merged_sources:
+        existing_doc.metadata["retrieval_sources"] = merged_sources
+
+    existing_rrf_score = _coerce_metric_float(existing_doc.metadata.get("rrf_score")) or 0.0
+    duplicate_rrf_score = _coerce_metric_float(duplicate_doc.metadata.get("rrf_score")) or 0.0
+    existing_doc.metadata["rrf_score"] = round(existing_rrf_score + duplicate_rrf_score, 6)
+
+    for rank_field in ("vector_rank", "bm25_rank"):
+        available_ranks = [
+            rank
+            for rank in (
+                _coerce_metric_int(existing_doc.metadata.get(rank_field)),
+                _coerce_metric_int(duplicate_doc.metadata.get(rank_field)),
+            )
+            if rank is not None
+        ]
+        if available_ranks:
+            existing_doc.metadata[rank_field] = min(available_ranks)
+
+    for weight_field in ("vector_weight", "bm25_weight"):
+        if existing_doc.metadata.get(weight_field) in (None, "") and duplicate_doc.metadata.get(weight_field) not in (None, ""):
+            existing_doc.metadata[weight_field] = duplicate_doc.metadata.get(weight_field)
+
+
+def _sort_fused_documents(documents: list[Document]) -> list[Document]:
+    return sorted(
+        documents,
+        key=lambda doc: (
+            float(doc.metadata.get("rrf_score", 0.0)),
+            -int(doc.metadata.get("vector_rank", 10**6)),
+            -int(doc.metadata.get("bm25_rank", 10**6)),
+        ),
+        reverse=True,
+    )
+
+
+def _dedupe_documents(documents: list[Document], *, stage_name: str) -> tuple[list[Document], int]:
+    deduped_documents: list[Document] = []
+    documents_by_key: dict[str, Document] = {}
+    duplicate_count = 0
+
+    for doc in documents:
+        dedupe_key = _document_dedupe_key(doc)
+        existing_doc = documents_by_key.get(dedupe_key)
+        if existing_doc is None:
+            documents_by_key[dedupe_key] = doc
+            deduped_documents.append(doc)
+            continue
+
+        duplicate_count += 1
+        if stage_name == "fused":
+            _merge_fused_duplicate(existing_doc, doc)
+
+    if stage_name == "fused":
+        deduped_documents = _sort_fused_documents(deduped_documents)
+
+    return deduped_documents, duplicate_count
 
 
 def _dedupe_documents_by_source_file(documents: list[Document]) -> list[Document]:
@@ -379,6 +539,8 @@ def _run_child_recall(
     else:
         vector_results = vectorstore.similarity_search_with_score(query, k=int(retrieval_plan["vector_k"]))
     vector_search_seconds = _elapsed_seconds(vector_start)
+    raw_vector_hit_count = len(vector_results)
+    vector_results, vector_duplicate_count = _dedupe_documents(vector_results, stage_name="vector")
 
     bm25_start = time.perf_counter()
     bm25_results = search_bm25_documents(
@@ -389,6 +551,8 @@ def _run_child_recall(
         limit=int(retrieval_plan["bm25_k"]),
     )
     bm25_search_seconds = _elapsed_seconds(bm25_start)
+    raw_bm25_hit_count = len(bm25_results)
+    bm25_results, bm25_duplicate_count = _dedupe_documents(bm25_results, stage_name="bm25")
 
     fusion_start = time.perf_counter()
     fused_results = reciprocal_rank_fusion(
@@ -397,8 +561,19 @@ def _run_child_recall(
         k=RRF_K,
         vector_weight=float(retrieval_plan["vector_weight"]),
         bm25_weight=float(retrieval_plan["bm25_weight"]),
-    )[: int(retrieval_plan.get("rerank_candidate_k", retrieval_plan["fusion_top_k"]))]
+    )
+    raw_fused_hit_count = len(fused_results)
+    fused_results, fused_duplicate_count = _dedupe_documents(fused_results, stage_name="fused")
+    fused_results = fused_results[: int(retrieval_plan.get("rerank_candidate_k", retrieval_plan["fusion_top_k"]))]
     fusion_seconds = _elapsed_seconds(fusion_start)
+
+    if vector_duplicate_count or bm25_duplicate_count or fused_duplicate_count:
+        _log_print(
+            "INFO: 子召回统一去重，"
+            f"vector_hits={raw_vector_hit_count}->{len(vector_results)}, "
+            f"bm25_hits={raw_bm25_hit_count}->{len(bm25_results)}, "
+            f"fused_hits={raw_fused_hit_count}->{len(fused_results)}"
+        )
 
     timings = {
         "child_vector_search_seconds": vector_search_seconds,
@@ -426,6 +601,7 @@ def _build_observability_payload(
     parent_vector_score_metrics: dict[str, Any],
     vector_score_metrics: dict[str, Any],
     reranker_metrics: dict[str, Any],
+    compression_metrics: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "query_type": query_type,
@@ -456,6 +632,7 @@ def _build_observability_payload(
             "parent_vector": parent_vector_score_metrics,
             "vector": vector_score_metrics,
         },
+        "compression": compression_metrics,
     }
 
 
@@ -704,6 +881,12 @@ def run_retrieval_pipeline(
         f"batches={reranker_metrics.get('batch_count')}, predict_seconds={reranker_metrics.get('predict_seconds')}, "
         f"fallback={reranker_metrics.get('fallback_used')}, failure={reranker_metrics.get('failure_reason')}"
     )
+    raw_reranked_hit_count = len(reranked_results)
+    reranked_results, reranked_duplicate_count = _dedupe_documents(reranked_results, stage_name="reranked")
+    if reranked_duplicate_count:
+        _log_print(
+            f"INFO: 重排结果统一去重，reranked_hits={raw_reranked_hit_count}->{len(reranked_results)}"
+        )
     selected_results = reranked_results[:effective_final_context_k]
     final_results = selected_results
 
@@ -714,15 +897,20 @@ def run_retrieval_pipeline(
             documents=selected_results,
             sentence_limit=CONTEXT_COMPRESSION_SENTENCE_K,
         )
-        compression_metrics = _compute_compression_metrics(selected_results, final_results)
+    raw_final_hit_count = len(final_results)
+    final_results, final_duplicate_count = _dedupe_documents(final_results, stage_name="final")
+    compression_metrics = _compute_compression_metrics(selected_results, final_results)
+    if CONTEXT_COMPRESSION_ENABLED and selected_results:
         _log_print(
             "INFO: 上下文压缩完成，"
             f"doc_hits={len(final_results)}, compressed_docs={compression_metrics['compressed_doc_count']}, "
             f"saved_chars={compression_metrics['saved_char_count']}, saved_ratio={compression_metrics['saved_ratio']:.2%}, "
             f"min_chars={CONTEXT_COMPRESSION_MIN_CHARS}, sentence_k={CONTEXT_COMPRESSION_SENTENCE_K}"
         )
-    else:
-        compression_metrics = _compute_compression_metrics(selected_results, final_results)
+    if final_duplicate_count:
+        _log_print(
+            f"INFO: 最终结果统一去重，final_hits={raw_final_hit_count}->{len(final_results)}"
+        )
     compression_seconds = _elapsed_seconds(compression_start)
 
     timing_metrics = {
@@ -799,6 +987,7 @@ def run_retrieval_pipeline(
         parent_vector_score_metrics=parent_vector_score_metrics,
         vector_score_metrics=vector_score_metrics,
         reranker_metrics=reranker_metrics,
+        compression_metrics=compression_metrics,
     )
     if debug:
         diagnostics["requested_strategy"] = requested_strategy

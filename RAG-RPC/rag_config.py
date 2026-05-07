@@ -198,6 +198,8 @@ CONTEXT_COMPRESSION_ENABLED = _get_bool_config("CONTEXT_COMPRESSION_ENABLED", Tr
 CONTEXT_COMPRESSION_MIN_CHARS = max(1, _get_int_config("CONTEXT_COMPRESSION_MIN_CHARS", 1500))
 # 每个文档压缩后保留的句子数量
 CONTEXT_COMPRESSION_SENTENCE_K = max(1, _get_int_config("CONTEXT_COMPRESSION_SENTENCE_K", 3))
+# 重排后高相关 chunk 保留原文的数量，避免关键证据被压缩截断
+CONTEXT_COMPRESSION_PRESERVE_TOP_N = max(0, _get_int_config("CONTEXT_COMPRESSION_PRESERVE_TOP_N", 2))
 # 是否启用 Elasticsearch BM25 召回
 ES_ENABLED = _get_bool_config("ES_ENABLED", True)
 ES_ENABLED_CONFIGURED = os.getenv("ES_ENABLED") is not None
@@ -284,6 +286,7 @@ def get_runtime_config() -> dict[str, object]:
 			"context_compression_enabled": CONTEXT_COMPRESSION_ENABLED,
 			"context_compression_min_chars": CONTEXT_COMPRESSION_MIN_CHARS,
 			"context_compression_sentence_k": CONTEXT_COMPRESSION_SENTENCE_K,
+			"context_compression_preserve_top_n": CONTEXT_COMPRESSION_PRESERVE_TOP_N,
 			"final_context_k": FINAL_CONTEXT_K,
 			"reranker_enabled": RERANKER_ENABLED,
 			"rerank_candidate_k": RERANK_CANDIDATE_K,
@@ -324,6 +327,7 @@ def get_runtime_config() -> dict[str, object]:
 			"context_compression_enabled": _get_config_source("CONTEXT_COMPRESSION_ENABLED"),
 			"context_compression_min_chars": _get_config_source("CONTEXT_COMPRESSION_MIN_CHARS"),
 			"context_compression_sentence_k": _get_config_source("CONTEXT_COMPRESSION_SENTENCE_K"),
+			"context_compression_preserve_top_n": _get_config_source("CONTEXT_COMPRESSION_PRESERVE_TOP_N"),
 			"reranker_enabled": _get_config_source("RERANKER_ENABLED"),
 			"rerank_candidate_k": _get_config_source("RERANK_CANDIDATE_K"),
 			"reranker_model_name": _get_config_source("RERANKER_MODEL_NAME"),

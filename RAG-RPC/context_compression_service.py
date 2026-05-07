@@ -5,12 +5,13 @@ import re
 from langchain_core.documents import Document
 
 from faq_support import is_faq_document
-from rag_config import CONTEXT_COMPRESSION_ENABLED, CONTEXT_COMPRESSION_MIN_CHARS, CONTEXT_COMPRESSION_SENTENCE_K
+from rag_config import CONTEXT_COMPRESSION_ENABLED, CONTEXT_COMPRESSION_MIN_CHARS, CONTEXT_COMPRESSION_PRESERVE_TOP_N, CONTEXT_COMPRESSION_SENTENCE_K
 from reranker_service import predict_relevance_scores
 
 
 SENTENCE_EXTRACT_PATTERN = re.compile(r"[^。！？.!?\n]+[。！？.!?]?", re.UNICODE)
 STRUCTURED_LINE_PATTERN = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)]\s+|\|)")
+STRONG_RELEVANCE_SCORE_RATIO = 0.6
 
 
 def _split_sentences(text: str) -> list[str]:
@@ -34,17 +35,80 @@ def _normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _coerce_reranker_score(value: object) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_preserved_document_indexes(documents: list[Document], preserve_top_n: int) -> set[int]:
+    if preserve_top_n <= 0 or not documents:
+        return set()
+
+    scored_documents = [
+        (index, _coerce_reranker_score(documents[index].metadata.get("reranker_score")))
+        for index in range(len(documents))
+    ]
+    ranked_documents = sorted(
+        scored_documents,
+        key=lambda item: (
+            float("inf") if item[1] is None else -item[1],
+            item[0],
+        ),
+    )
+    top_ranked_documents = ranked_documents[:preserve_top_n]
+    available_scores = [score for _, score in top_ranked_documents if score is not None]
+    if not available_scores:
+        return {index for index, _ in top_ranked_documents}
+
+    best_score = max(available_scores)
+    if best_score <= 0:
+        return {index for index, _ in top_ranked_documents}
+
+    min_preserve_score = best_score * STRONG_RELEVANCE_SCORE_RATIO
+    preserved_indexes = {
+        index
+        for index, score in top_ranked_documents
+        if score is not None and score >= min_preserve_score
+    }
+    if preserved_indexes:
+        return preserved_indexes
+
+    return {top_ranked_documents[0][0]}
+
+
+def _copy_document_with_metadata(doc: Document, **metadata_updates: object) -> Document:
+    return Document(
+        page_content=doc.page_content,
+        metadata={
+            **doc.metadata,
+            **metadata_updates,
+        },
+    )
+
+
 def compress_context(query: str, documents: list[Document], sentence_limit: int | None = None) -> list[Document]:
     if not documents or not CONTEXT_COMPRESSION_ENABLED:
         return documents
 
     resolved_sentence_limit = max(1, sentence_limit or CONTEXT_COMPRESSION_SENTENCE_K)
     resolved_min_chars = max(1, CONTEXT_COMPRESSION_MIN_CHARS)
+    preserved_indexes = _resolve_preserved_document_indexes(documents, CONTEXT_COMPRESSION_PRESERVE_TOP_N)
     compressed_documents: list[Document] = []
 
-    for doc in documents:
+    for index, doc in enumerate(documents):
         if is_faq_document(doc.metadata):
             compressed_documents.append(doc)
+            continue
+
+        if index in preserved_indexes:
+            compressed_documents.append(_copy_document_with_metadata(
+                doc,
+                context_compression_skipped=True,
+                context_compression_skip_reason="high_relevance",
+                context_compression_preserved_original=True,
+            ))
             continue
 
         normalized_content = _normalize_text(doc.page_content)

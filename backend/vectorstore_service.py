@@ -7,11 +7,18 @@ from langchain_core.documents import Document
 
 from documents_service import build_chunk_id, sanitize_metadata
 from retrieval_response_formatter import extract_context_labels
-from rag_config import REMOTE_RPC_GET_RECORDS_PAGE_SIZE, REMOTE_RPC_MAX_BATCH_BYTES
+from rag_config import REMOTE_RPC_GET_RECORDS_PAGE_SIZE, REMOTE_RPC_MAX_BATCH_BYTES, REMOTE_RPC_MAX_BATCH_CHUNKS
 
 
 _progress_line_length = 0
-MAX_RPC_BATCH_CHUNKS = 500
+_REMOTE_MEMORY_PRESSURE_MARKERS = (
+    "cannot allocate memory",
+    "can't allocate memory",
+    "out of memory",
+    "defaultcpuallocator",
+    "enforce fail at alloc",
+    "resource exhausted",
+)
 
 
 def _iter_vectorstore_records(vectorstore, include: List[str], batch_size: int = REMOTE_RPC_GET_RECORDS_PAGE_SIZE):
@@ -43,6 +50,11 @@ def _estimate_upsert_payload_bytes(chunk_id: str, document: str, metadata: dict)
     return len(chunk_id.encode("utf-8")) + len(document.encode("utf-8")) + len(metadata_json.encode("utf-8")) + 256
 
 
+def _is_remote_memory_pressure_error(exc: Exception) -> bool:
+    error_text = str(exc).strip().lower()
+    return any(marker in error_text for marker in _REMOTE_MEMORY_PRESSURE_MARKERS)
+
+
 def _build_upsert_batches(ids: list[str], documents: list[str], metadatas: list[dict]) -> list[tuple[list[str], list[str], list[dict]]]:
     batches: list[tuple[list[str], list[str], list[dict]]] = []
     current_ids: list[str] = []
@@ -53,7 +65,7 @@ def _build_upsert_batches(ids: list[str], documents: list[str], metadatas: list[
     for chunk_id, document, metadata in zip(ids, documents, metadatas):
         item_bytes = _estimate_upsert_payload_bytes(chunk_id, document, metadata)
         should_flush = bool(current_ids) and (
-            len(current_ids) >= MAX_RPC_BATCH_CHUNKS
+            len(current_ids) >= REMOTE_RPC_MAX_BATCH_CHUNKS
             or current_bytes + item_bytes > REMOTE_RPC_MAX_BATCH_BYTES
         )
         if should_flush:
@@ -72,6 +84,31 @@ def _build_upsert_batches(ids: list[str], documents: list[str], metadatas: list[
         batches.append((current_ids, current_documents, current_metadatas))
 
     return batches
+
+
+def _submit_upsert_batch(
+    vectorstore,
+    batch_ids: list[str],
+    batch_docs: list[str],
+    batch_metas: list[dict],
+) -> None:
+    try:
+        vectorstore.upsert(
+            ids=batch_ids,
+            documents=batch_docs,
+            metadatas=batch_metas,
+            embeddings=[],  # 传空向量从而触发 RAG-RPC 进行向量计算
+        )
+    except RuntimeError as exc:
+        if not _is_remote_memory_pressure_error(exc) or len(batch_docs) <= 1:
+            raise
+
+        midpoint = max(1, len(batch_docs) // 2)
+        _write_progress_line(
+            f"[add_documents] retry split batch {len(batch_docs)} -> {midpoint}+{len(batch_docs) - midpoint} after remote memory pressure"
+        )
+        _submit_upsert_batch(vectorstore, batch_ids[:midpoint], batch_docs[:midpoint], batch_metas[:midpoint])
+        _submit_upsert_batch(vectorstore, batch_ids[midpoint:], batch_docs[midpoint:], batch_metas[midpoint:])
 
 
 def upsert_chunks(chunks: List[Document], vectorstore) -> dict:
@@ -110,12 +147,7 @@ def upsert_chunks(chunks: List[Document], vectorstore) -> dict:
 
     for batch_index, (batch_ids, batch_docs, batch_metas) in enumerate(batches, start=1):
         _write_progress_line(f"[add_documents] submitting batch {batch_index}/{len(batches)} ({len(batch_docs)} chunks) to RPC")
-        vectorstore.upsert(
-            ids=batch_ids,
-            documents=batch_docs,
-            metadatas=batch_metas,
-            embeddings=[],  # 传空向量从而触发 RAG-RPC 进行向量计算
-        )
+        _submit_upsert_batch(vectorstore, batch_ids, batch_docs, batch_metas)
 
     add_elapsed = time.perf_counter() - upsert_start
     

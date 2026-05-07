@@ -143,6 +143,7 @@ REMOTE_RPC_RETRIEVE_TIMEOUT_SECONDS = max(1, _get_int_config("REMOTE_RPC_RETRIEV
 REMOTE_RPC_UPSERT_TIMEOUT_SECONDS = max(1, _get_int_config("REMOTE_RPC_UPSERT_TIMEOUT_SECONDS", 600))
 REMOTE_RPC_ADMIN_TIMEOUT_SECONDS = max(1, _get_int_config("REMOTE_RPC_ADMIN_TIMEOUT_SECONDS", 60))
 REMOTE_RPC_MAX_BATCH_BYTES = max(256 * 1024, _get_int_config("REMOTE_RPC_MAX_BATCH_BYTES", 3 * 1024 * 1024))
+REMOTE_RPC_MAX_BATCH_CHUNKS = max(1, _get_int_config("REMOTE_RPC_MAX_BATCH_CHUNKS", 16))
 REMOTE_RPC_KEEPALIVE_TIME_MS = max(1_000, _get_int_config("REMOTE_RPC_KEEPALIVE_TIME_MS", 300_000))
 REMOTE_RPC_KEEPALIVE_TIMEOUT_MS = max(1_000, _get_int_config("REMOTE_RPC_KEEPALIVE_TIMEOUT_MS", 10_000))
 REMOTE_RPC_KEEPALIVE_PERMIT_WITHOUT_CALLS = _get_bool_config("REMOTE_RPC_KEEPALIVE_PERMIT_WITHOUT_CALLS", False)
@@ -258,6 +259,7 @@ def get_runtime_config() -> dict[str, object]:
 			"remote_rpc_upsert_timeout_seconds": REMOTE_RPC_UPSERT_TIMEOUT_SECONDS,
 			"remote_rpc_admin_timeout_seconds": REMOTE_RPC_ADMIN_TIMEOUT_SECONDS,
 			"remote_rpc_max_batch_bytes": REMOTE_RPC_MAX_BATCH_BYTES,
+			"remote_rpc_max_batch_chunks": REMOTE_RPC_MAX_BATCH_CHUNKS,
 			"remote_rpc_get_records_page_size": REMOTE_RPC_GET_RECORDS_PAGE_SIZE,
 		},
 		"retrieval": {

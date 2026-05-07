@@ -21,3 +21,4 @@ elasticsearch-9.3.2
 logs/
 .tmp/
 chroma_db/
+.playwright-*/*
